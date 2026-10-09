@@ -256,6 +256,81 @@ test_cm_invoked_from_agents_subdir_cwd() {
   cleanup_repo "$repo"
 }
 
+# --- fix-scoped staging: the gate commits/reverts only what cm fix changed ---
+
+gate_commit_files() {
+  (cd "$1" && git show --pretty=format: --name-only HEAD | sed '/^$/d' | sort | tr '\n' '|')
+}
+
+test_cm_fix_commit_contains_only_fix_files() {
+  local repo; repo=$(setup_repo)
+  echo "scratch notes, not for shipping" > "$repo/notes.txt"
+  echo "uncommitted work" >> "$repo/README.txt"
+  MOCK_CM_FIX_NEW_FILE="fix helper.py" MOCK_CM_FIX_NEW_LINES=3 \
+  SECURITY_GATE_TEST_CMD='mkdir -p __pycache__ && echo bytecode > __pycache__/vuln.cpython-313.pyc' \
+  MOCK_CM_REPORT_MODE=high \
+    run_hook "$AGENTS_DIR/security_gate_hook.sh" "$repo"
+  assert_eq "cm: fix-files-only commit allows" "allow" "$(decision "$repo")"
+  assert_eq "cm: gate commit holds exactly the files cm fix changed (new file with a space + vuln.py)" \
+    "fix helper.py|vuln.py|" "$(gate_commit_files "$repo")"
+  assert_eq "cm: pre-existing untracked notes.txt is not committed" \
+    "?? notes.txt" "$(cd "$repo" && git status --porcelain -- notes.txt)"
+  assert_eq "cm: artifact written by the gate's test command is not committed" \
+    "?? __pycache__/" "$(cd "$repo" && git status --porcelain -- __pycache__)"
+  assert_eq "cm: unrelated README.txt edit stays unstaged and uncommitted" \
+    " M README.txt" "$(cd "$repo" && git status --porcelain -- README.txt)"
+  cleanup_repo "$repo"
+}
+
+test_cm_new_file_only_large_fix_escalates() {
+  local repo; repo=$(setup_repo)
+  echo "scratch notes" > "$repo/notes.txt"
+  local head_before; head_before=$(cd "$repo" && git rev-parse HEAD)
+  MOCK_CM_FIX_ONLY_NEW=true MOCK_CM_FIX_NEW_FILE="gen/new helper.py" MOCK_CM_FIX_NEW_LINES=100 \
+  SECURITY_GATE_LARGE_FIX_LINES=10 SECURITY_GATE_TEST_CMD=true MOCK_CM_REPORT_MODE=high \
+    run_hook "$AGENTS_DIR/security_gate_hook.sh" "$repo"
+  assert_eq "cm: new-file-only fix over LARGE_FIX_LINES escalates + denies" "deny" "$(decision "$repo")"
+  assert_contains "cm: new-file-only fix size counts the new file's lines" \
+    "$(cat "$repo/.hook_stderr")" "Fix diff is large (100 lines"
+  assert_eq "cm: no gate commit for the oversized new-file-only fix" \
+    "$head_before" "$(cd "$repo" && git rev-parse HEAD)"
+  assert_eq "cm: file created by the reverted fix is removed" \
+    "absent" "$([ -e "$repo/gen/new helper.py" ] && echo present || echo absent)"
+  assert_eq "cm: pre-existing untracked file survives the revert" \
+    "scratch notes" "$(cat "$repo/notes.txt" 2>/dev/null)"
+  cleanup_repo "$repo"
+}
+
+test_cm_small_tracked_fix_still_committed() {
+  local repo; repo=$(setup_repo)
+  echo "staged but unrelated" > "$repo/staged.txt"
+  (cd "$repo" && git add staged.txt)
+  SECURITY_GATE_TEST_CMD=true MOCK_CM_REPORT_MODE=high \
+    run_hook "$AGENTS_DIR/security_gate_hook.sh" "$repo"
+  assert_eq "cm: small tracked-file fix allows" "allow" "$(decision "$repo")"
+  assert_contains "cm: small tracked-file fix logged as FIXED" "$(log_events "$repo")" "FIXED"
+  assert_eq "cm: small tracked-file fix commit holds only vuln.py" "vuln.py|" "$(gate_commit_files "$repo")"
+  assert_contains "cm: fixed vuln.py content is committed" "$(cd "$repo" && git show HEAD:vuln.py)" "# fixed"
+  assert_eq "cm: user's staged staged.txt stays staged, not swept into the gate commit" \
+    "A  staged.txt" "$(cd "$repo" && git status --porcelain -- staged.txt)"
+  cleanup_repo "$repo"
+}
+
+test_cm_failed_fix_revert_keeps_prior_edits() {
+  local repo; repo=$(setup_repo)
+  echo "user wip line" >> "$repo/vuln.py"
+  echo "scratch notes" > "$repo/notes.txt"
+  MOCK_CM_FIX_NEW_FILE="new helper.py" SECURITY_GATE_TEST_CMD=false MOCK_CM_REPORT_MODE=high \
+    run_hook "$AGENTS_DIR/security_gate_hook.sh" "$repo"
+  assert_eq "cm: fix that breaks tests denies" "deny" "$(decision "$repo")"
+  assert_eq "cm: revert restores the pre-fix content of a file with uncommitted edits" \
+    "$(printf '%s\n%s' '# a file that a scanner will flag' 'user wip line')" "$(cat "$repo/vuln.py")"
+  assert_eq "cm: revert removes the file cm fix created" \
+    "absent" "$([ -e "$repo/new helper.py" ] && echo present || echo absent)"
+  assert_eq "cm: revert keeps the pre-existing untracked file" "scratch notes" "$(cat "$repo/notes.txt" 2>/dev/null)"
+  cleanup_repo "$repo"
+}
+
 test_semgrep_pass_no_findings() {
   local repo; repo=$(setup_repo)
   MOCK_SEMGREP_MODE=clean run_hook "$AGENTS_DIR/security_gate_hook_semgrep.sh" "$repo"
@@ -314,6 +389,10 @@ for t in \
   test_cm_large_fix_diff_escalates_not_autocommitted \
   test_cm_mixed_severity_fixes_blocking_logs_advisory \
   test_cm_invoked_from_agents_subdir_cwd \
+  test_cm_fix_commit_contains_only_fix_files \
+  test_cm_new_file_only_large_fix_escalates \
+  test_cm_small_tracked_fix_still_committed \
+  test_cm_failed_fix_revert_keeps_prior_edits \
   test_semgrep_pass_no_findings \
   test_semgrep_error_blocks_by_default \
   test_semgrep_error_allow_on_error_true \

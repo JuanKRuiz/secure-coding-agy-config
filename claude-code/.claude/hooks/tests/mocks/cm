@@ -48,7 +48,16 @@ case "$1" in
     fi
     echo "cm fix: applied remediation patch for ${2:-unknown}"
     touch "$STATE_FILE"
-    if [ -n "$MOCK_FILE" ] && [ -f "$MOCK_FILE" ]; then
+    # MOCK_CM_FIX_NEW_FILE: the fix also creates this file with
+    # MOCK_CM_FIX_NEW_LINES lines. MOCK_CM_FIX_ONLY_NEW=true: skip the edit
+    # to MOCK_FILE, i.e. a fix that only adds new files.
+    if [ -n "${MOCK_CM_FIX_NEW_FILE:-}" ]; then
+      mkdir -p "$(dirname "$MOCK_CM_FIX_NEW_FILE")"
+      for i in $(seq 1 "${MOCK_CM_FIX_NEW_LINES:-3}"); do
+        echo "# generated helper line $i"
+      done > "$MOCK_CM_FIX_NEW_FILE"
+    fi
+    if [ "${MOCK_CM_FIX_ONLY_NEW:-false}" != "true" ] && [ -n "$MOCK_FILE" ] && [ -f "$MOCK_FILE" ]; then
       if [ "${MOCK_CM_FIX_LARGE:-false}" = "true" ]; then
         for i in $(seq 1 100); do echo "# padding line $i" >> "$MOCK_FILE"; done
       else

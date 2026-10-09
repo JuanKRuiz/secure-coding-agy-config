@@ -156,3 +156,164 @@ read_lines_into_array() {
     eval "$__arr_name+=(\"\$__line\")"
   done <<< "$__input"
 }
+
+# --- Fix-scoped staging for `cm fix` (CodeMender hook) ---
+# The gate must size-check, commit and revert exactly the files `cm fix`
+# changed. It must never `git add -A` / `git add -u` (that sweeps in the
+# user's unrelated work, artifacts written by the gate's own test run such
+# as __pycache__/ or .pytest_cache/, and the audit log), and never
+# `git checkout -- .` (that destroys uncommitted work).
+#
+# The fix set is measured from two working-tree snapshots written through
+# throwaway index files (GIT_INDEX_FILE), so the real index is untouched:
+#   - gate_fix_snapshot_begin, right before `cm fix`: the working-tree
+#     content of every tracked file -> GATE_FIX_PRE_TREE. The untracked,
+#     non-ignored files that already exist are recorded as intent-to-add
+#     entries in a second scratch index, so they are never mistaken for
+#     files the fix created.
+#   - gate_fix_snapshot_end, right after `cm fix` and BEFORE the test
+#     command runs: the same tracked snapshot plus every untracked file that
+#     is new since the first snapshot -> GATE_FIX_POST_TREE.
+# GATE_FIX_FILES = paths that differ between the two trees (tracked files
+# cm fix modified or deleted, plus files it created).
+# GATE_FIX_CHANGED_LINES = insertions + deletions over exactly those paths,
+# new files included, so a fix that only adds files is still size-checked
+# against SECURITY_GATE_LARGE_FIX_LINES.
+#
+# Known limits: a pre-existing untracked file that cm fix edits is not part
+# of the fix set (it is neither committed nor reverted); binary files count
+# as 0 lines (as with `git diff --shortstat`); when a tracked file already
+# had uncommitted edits before cm fix touched it, the gate commit carries
+# that file's whole working-tree content (a revert restores the pre-fix
+# content, uncommitted edits included).
+GATE_FIX_PRE_TREE=""
+GATE_FIX_POST_TREE=""
+GATE_FIX_FILES=()
+GATE_FIX_CHANGED_LINES=0
+_GATE_FIX_TMP=""
+
+# _gate_fix_seed_index DEST: copy the real index to DEST (absent if the
+# repo has no index yet).
+_gate_fix_seed_index() {
+  local real
+  real=$(git rev-parse --git-path index) || return 1
+  rm -f "$1"
+  if [ -f "$real" ]; then
+    cp "$real" "$1" || return 1
+  fi
+}
+
+# _gate_fix_xargs_add LIST INDEX [git-add flags...]: `git add` every path
+# in the NUL-delimited LIST into INDEX (literal pathspecs, spaces safe).
+_gate_fix_xargs_add() {
+  local list="$1" index="$2"
+  shift 2
+  [ -s "$list" ] || return 0
+  xargs -0 env GIT_INDEX_FILE="$index" GIT_LITERAL_PATHSPECS=1 git add "$@" -- \
+    < "$list" > /dev/null 2>&1
+}
+
+gate_fix_reset() {
+  if [ -n "$_GATE_FIX_TMP" ]; then
+    rm -rf "$_GATE_FIX_TMP"
+  fi
+  _GATE_FIX_TMP=""
+  GATE_FIX_PRE_TREE=""
+  GATE_FIX_POST_TREE=""
+  GATE_FIX_FILES=()
+  GATE_FIX_CHANGED_LINES=0
+}
+
+# gate_fix_snapshot_begin: call right before `cm fix`. Returns non-zero if
+# the working tree could not be snapshotted (e.g. unmerged index entries).
+gate_fix_snapshot_begin() {
+  gate_fix_reset
+  _GATE_FIX_TMP=$(mktemp -d) || return 1
+  local tracked="$_GATE_FIX_TMP/tracked.idx" seen="$_GATE_FIX_TMP/seen.idx"
+  _gate_fix_seed_index "$tracked" || return 1
+  GIT_INDEX_FILE="$tracked" git add -u > /dev/null 2>&1 || return 1
+  GATE_FIX_PRE_TREE=$(GIT_INDEX_FILE="$tracked" git write-tree) || return 1
+  _gate_fix_seed_index "$seen" || return 1
+  git ls-files -z --others --exclude-standard > "$_GATE_FIX_TMP/untracked.lst" || return 1
+  _gate_fix_xargs_add "$_GATE_FIX_TMP/untracked.lst" "$seen" -N || return 1
+}
+
+# gate_fix_snapshot_end: call right after `cm fix`, before anything else
+# (tests, logging) writes to the working tree. Fills GATE_FIX_POST_TREE,
+# GATE_FIX_FILES and GATE_FIX_CHANGED_LINES.
+gate_fix_snapshot_end() {
+  [ -n "$GATE_FIX_PRE_TREE" ] && [ -n "$_GATE_FIX_TMP" ] || return 1
+  local post="$_GATE_FIX_TMP/post.idx" new_list="$_GATE_FIX_TMP/new.lst"
+  local f ins del rest
+  _gate_fix_seed_index "$post" || return 1
+  GIT_INDEX_FILE="$post" git add -u > /dev/null 2>&1 || return 1
+  GIT_INDEX_FILE="$_GATE_FIX_TMP/seen.idx" git ls-files -z --others --exclude-standard > "$new_list" || return 1
+  _gate_fix_xargs_add "$new_list" "$post" || return 1
+  GATE_FIX_POST_TREE=$(GIT_INDEX_FILE="$post" git write-tree) || return 1
+
+  GATE_FIX_FILES=()
+  while IFS= read -r -d '' f; do
+    GATE_FIX_FILES+=("$f")
+  done < <(git diff-tree -r -z --no-renames --name-only "$GATE_FIX_PRE_TREE" "$GATE_FIX_POST_TREE")
+
+  GATE_FIX_CHANGED_LINES=0
+  while IFS=$'\t' read -r -d '' ins del rest; do
+    case "$ins$del" in
+      *[!0-9]*|'') continue ;;  # binary ("-" / "-"): 0 lines, like --shortstat
+    esac
+    GATE_FIX_CHANGED_LINES=$((GATE_FIX_CHANGED_LINES + ins + del))
+  done < <(git diff-tree -r -z --no-renames --numstat "$GATE_FIX_PRE_TREE" "$GATE_FIX_POST_TREE")
+
+  # The scratch indexes are no longer needed: revert/commit work from the
+  # trees and GATE_FIX_FILES.
+  rm -rf "$_GATE_FIX_TMP"
+  _GATE_FIX_TMP=""
+}
+
+# gate_fix_revert: undo only what `cm fix` changed. Files it modified or
+# deleted are restored to their pre-fix working-tree content (through a
+# scratch index, so the real index is untouched); files it created are
+# removed. Pre-existing untracked files and unrelated edits are left alone.
+# Safe to call more than once, and a no-op if no snapshot was taken.
+gate_fix_revert() {
+  [ -n "$GATE_FIX_PRE_TREE" ] || return 0
+  if [ -z "$GATE_FIX_POST_TREE" ] && ! gate_fix_snapshot_end; then
+    echo "(warning: could not determine which files cm fix changed - working tree left as is; review 'git status')" >&2
+    return 0
+  fi
+  [ "${#GATE_FIX_FILES[@]}" -gt 0 ] || return 0
+  local f idx
+  local restore=()
+  for f in "${GATE_FIX_FILES[@]}"; do
+    if git cat-file -e "$GATE_FIX_PRE_TREE:$f" 2> /dev/null; then
+      restore+=("$f")
+    else
+      rm -f -- "$f"
+    fi
+  done
+  if [ "${#restore[@]}" -gt 0 ]; then
+    idx=$(mktemp) || return 0
+    rm -f "$idx"
+    if GIT_INDEX_FILE="$idx" git read-tree "$GATE_FIX_PRE_TREE" > /dev/null 2>&1; then
+      printf '%s\0' "${restore[@]}" \
+        | GIT_INDEX_FILE="$idx" git checkout-index -f -z --stdin >&2 2>&1 \
+        || echo "(warning: failed to restore some files changed by cm fix - review 'git status')" >&2
+    else
+      echo "(warning: failed to read the pre-fix snapshot - review 'git status')" >&2
+    fi
+    rm -f "$idx"
+  fi
+}
+
+# gate_fix_commit MESSAGE: stage and commit exactly GATE_FIX_FILES (other
+# staged or unstaged changes stay where they are). Returns 0 = committed,
+# 1 = nothing to commit, 2 = git add/commit failed.
+gate_fix_commit() {
+  local msg="$1"
+  [ "${#GATE_FIX_FILES[@]}" -gt 0 ] || return 1
+  GIT_LITERAL_PATHSPECS=1 git add -- "${GATE_FIX_FILES[@]}" >&2 2>&1 || return 2
+  if GIT_LITERAL_PATHSPECS=1 git diff --cached --quiet HEAD -- "${GATE_FIX_FILES[@]}"; then
+    return 1
+  fi
+  GIT_LITERAL_PATHSPECS=1 git commit -q -m "$msg" -- "${GATE_FIX_FILES[@]}" >&2 2>&1 || return 2
+}

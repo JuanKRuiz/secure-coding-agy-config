@@ -53,12 +53,12 @@ fi
 
 cd "$(_gate_repo_root)" || exit 1
 
-revert_target_file() {
-  if [ -n "${1:-}" ]; then
-    git checkout -- "$1" >&2 2>&1 || true
-  else
-    git checkout -- . >&2 2>&1 || true
-  fi
+# Undo only what the last `cm fix` changed (gate_fix_* in
+# lib/gate_common.sh): never `git checkout -- .`, which would also wipe the
+# user's unrelated uncommitted work, and never delete pre-existing
+# untracked files.
+revert_fix() {
+  gate_fix_revert || true
 }
 
 command -v cm >/dev/null 2>&1 || handle_scan_error "codemender" "the 'cm' CLI is not on PATH"
@@ -165,18 +165,34 @@ while IFS= read -r finding <&3; do
 
   while [ $RETRY_COUNT -le "$SECURITY_GATE_MAX_RETRIES" ]; do
     echo "Attempting cm fix for: $FINDING_ID (Attempt: $((RETRY_COUNT+1)))" >&2
+    # Snapshot the working tree so the gate can tell exactly which files
+    # `cm fix` changed: the size check, the commit and every revert below
+    # are scoped to that set, never to `git add -A` / `git checkout -- .`.
+    if ! gate_fix_snapshot_begin; then
+      gate_fix_reset
+      rm -rf "$WORK_DIR"
+      deny "Security gate could not snapshot the working tree before 'cm fix' for $FINDING_ID (unmerged paths?), so it cannot scope an automated fix commit. Resolve 'git status' and retry the push."
+    fi
     if ! cm fix "$FINDING_ID" -y --bypass-warning >&2; then
       echo "cm fix itself failed. Reverting and retrying." >&2
-      revert_target_file "$FILE"
+      revert_fix
       RETRY_COUNT=$((RETRY_COUNT+1))
       continue
+    fi
+    # Record the fix's own file set (tracked files it changed + files it
+    # created) BEFORE the test command runs, so test-run artifacts
+    # (__pycache__/, .pytest_cache/, coverage files) never join it.
+    if ! gate_fix_snapshot_end; then
+      gate_fix_reset
+      rm -rf "$WORK_DIR"
+      deny "Security gate could not determine which files 'cm fix' changed for $FINDING_ID; its changes are left uncommitted in the working tree. Review 'git status' before retrying the push."
     fi
 
     # GREEN step: run the test suite (configurable; default assumes a
     # Python unittest layout - override SECURITY_GATE_TEST_CMD otherwise).
     if ! sh -c "$SECURITY_GATE_TEST_CMD" >&2; then
       echo "Fix broke the tests. Reverting changes..." >&2
-      revert_target_file "$FILE"
+      revert_fix
       RETRY_COUNT=$((RETRY_COUNT+1))
       continue
     fi
@@ -188,38 +204,38 @@ while IFS= read -r finding <&3; do
       | jq --arg id "$FINDING_ID" '[.[] | ((.status // .Status // "OPEN") | ascii_upcase) as $st | select($st != "FIXED" and $st != "DISMISSED") | select((.finding_id // .FindingID) == $id)] | length' 2>/dev/null || echo 1)
     if [ "$STILL_OPEN" != "0" ]; then
       echo "Tests passed, but $FINDING_ID is still reported open after rescan - not trusting this fix." >&2
-      revert_target_file "$FILE"
+      revert_fix
       RETRY_COUNT=$((RETRY_COUNT+1))
       continue
     fi
 
     # Don't blindly auto-commit an oversized generated patch - escalate
     # for human review instead (this is where `cm verify` may get used).
-    if [ -n "$FILE" ]; then
-      DIFF_STAT=$(git diff --shortstat -- "$FILE")
-    else
-      DIFF_STAT=$(git diff --shortstat)
-    fi
-    INS=$(echo "$DIFF_STAT" | grep -oE '[0-9]+ insertion' | grep -oE '[0-9]+' || echo 0)
-    DEL=$(echo "$DIFF_STAT" | grep -oE '[0-9]+ deletion' | grep -oE '[0-9]+' || echo 0)
-    CHANGED_LINES=$((INS + DEL))
+    # Size = insertions + deletions over exactly the files cm fix changed,
+    # new files included (a fix that only adds files is not "0 lines").
+    CHANGED_LINES=$GATE_FIX_CHANGED_LINES
     if [ "$CHANGED_LINES" -gt "$SECURITY_GATE_LARGE_FIX_LINES" ]; then
-      echo "Fix diff is large ($CHANGED_LINES lines > $SECURITY_GATE_LARGE_FIX_LINES) - escalating for human review instead of auto-committing." >&2
-      revert_target_file "$FILE"
+      echo "Fix diff is large ($CHANGED_LINES lines in ${#GATE_FIX_FILES[@]} file(s) > $SECURITY_GATE_LARGE_FIX_LINES) - escalating for human review instead of auto-committing." >&2
+      revert_fix
       LARGE_DIFF=true
       break
     fi
 
-    if [ -n "$FILE" ]; then
-      git add -- "$FILE" >&2 2>&1
+    # Commit only the files cm fix changed; everything else in the working
+    # tree (unrelated edits, pre-existing untracked files, test artifacts,
+    # the audit log) stays untouched and uncommitted.
+    if gate_fix_commit "security: automated fix for $FINDING_ID ($FILE)"; then
+      COMMIT_RC=0
     else
-      git add -u >&2 2>&1
+      COMMIT_RC=$?
     fi
-    if git diff --cached --quiet; then
+    if [ "$COMMIT_RC" -eq 1 ]; then
       echo "cm fix confirmed the finding closed but left no working-tree changes to commit." >&2
-    else
-      git commit -q -m "security: automated fix for $FINDING_ID ($FILE)" >&2 2>&1
+    elif [ "$COMMIT_RC" -ne 0 ]; then
+      rm -rf "$WORK_DIR"
+      deny "cm fix for $FINDING_ID passed tests and rescan, but committing its files failed (see stderr). The fix is left uncommitted in: ${GATE_FIX_FILES[*]}"
     fi
+    gate_fix_reset
     echo "Fix successful, verified by rescan, and committed (GREEN)!" >&2
     log_event "FIXED" "codemender" "$(jq -n --argjson f "$finding" '{findings:[$f]}')"
     RESOLVED=true
@@ -242,7 +258,7 @@ while IFS= read -r finding <&3; do
       1)
         prompt_user JUSTIFICATION "Enter deferral justification: "
         [ -z "$JUSTIFICATION" ] && JUSTIFICATION="unspecified"
-        revert_target_file "$FILE"
+        revert_fix
         log_event "ADVISORY" "codemender" "$(jq -n --argjson f "$finding" --arg j "$JUSTIFICATION" '{findings:[$f], justification:$j}')"
         notify "ADVISORY" "Finding $FINDING_ID ($SEV) deferred by $(git config user.email 2>/dev/null || echo unknown): $JUSTIFICATION" \
           "$(jq -n --argjson f "$finding" '{findings:[$f]}')"
@@ -254,10 +270,10 @@ while IFS= read -r finding <&3; do
             | jq -r --arg id "$FINDING_ID" '[.[] | select((.finding_id // .FindingID) == $id) | (.status // .Status // "OPEN") | ascii_upcase] | first // "OPEN"' 2>/dev/null || echo "OPEN")
           if [ "$VERIFY_STATUS" = "DISMISSED" ]; then
             echo "cm verify dismissed this finding as non-exploitable - treating as advisory and proceeding." >&2
-            revert_target_file "$FILE"
+            revert_fix
             log_event "ADVISORY" "codemender" "$(jq -n --argjson f "$finding" '{findings:[$f], reason:"cm verify found non-exploitable"}')"
           else
-            revert_target_file "$FILE"
+            revert_fix
             log_event "BLOCKED" "codemender" "$(jq -n --argjson f "$finding" '{findings:[$f], reason:"confirmed exploitable via cm verify"}')"
             notify "BLOCKED - HELP NEEDED" "Finding $FINDING_ID confirmed exploitable by cm verify and could not be auto-fixed. Push blocked - needs help from another team." \
               "$(jq -n --argjson f "$finding" '{findings:[$f]}')"
@@ -266,12 +282,12 @@ while IFS= read -r finding <&3; do
           fi
         else
           echo "cm verify found this non-exploitable - treating as advisory and proceeding." >&2
-          revert_target_file "$FILE"
+          revert_fix
           log_event "ADVISORY" "codemender" "$(jq -n --argjson f "$finding" '{findings:[$f], reason:"cm verify found non-exploitable"}')"
         fi
         ;;
       *)
-        revert_target_file "$FILE"
+        revert_fix
         log_event "BLOCKED" "codemender" "$(jq -n --argjson f "$finding" '{findings:[$f], reason:"unresolved - no fix, deferral, or verification decision"}')"
         rm -rf "$WORK_DIR"
         deny "Unresolved finding $FINDING_ID ($SEV): no fix, deferral, or verification decision was made. See $SECURITY_GATE_LOG."
