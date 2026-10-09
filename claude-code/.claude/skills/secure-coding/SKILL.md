@@ -1,21 +1,20 @@
 ---
 name: secure-coding
 description: >-
-  Applies mandatory secure coding rules for Python applications and ADK
-  agents: input validation, parameterized SQL, path canonicalization, safe
-  deserialization, XSS output encoding, authentication and sessions, access
-  control, password hashing, encryption, secure randomness, dependency
-  scanning, OWASP LLM agent defenses, human-in-the-loop approval, audit
-  logging, and secrets storage. Use when writing or reviewing a Python
-  function or diff that handles untrusted input, builds SQL, file paths, or
-  shell commands, renders user content in templates, implements login,
-  sessions, password reset, or JWT validation, adds role or ownership checks,
-  deserializes, hashes, or encrypts data, generates tokens, or stores API
-  keys; when designing an agent's tools, permissions, or guardrails; or during
-  the GREEN step of a security fix. Don't use as the entry point for fixing a
-  vulnerability (use test-driven-development), for starting a security review
-  (use threat-modeling), or for non-Python code, which these rules do not
-  cover.
+  Applies mandatory secure coding rules for Python apps and ADK agents: input
+  validation, safe deserialization, XSS output encoding, authentication and
+  sessions, access control, password hashing, encryption, secure randomness,
+  dependency scanning, OWASP LLM prompt injection and excessive agency
+  defenses, human-in-the-loop approval, audit logging, and secrets storage.
+  Use when writing or reviewing a Python function or diff that handles
+  untrusted input, builds SQL, file paths, or shell commands, renders user
+  content in templates, implements login, sessions, password reset, or JWT
+  validation, adds role or ownership checks, deserializes, hashes, or encrypts
+  data, generates tokens, or stores API keys; when designing an agent's tools,
+  permissions, or guardrails; or during the GREEN step of a security fix.
+  Don't use as the entry point for fixing a vulnerability or adding
+  authentication or authorization logic (use test-driven-development), for
+  starting a security review (use threat-modeling), or for non-Python code.
 ---
 
 # Secure Coding Guidelines
@@ -40,8 +39,8 @@ This document outlines the mandatory secure coding practices for Python applicat
   - If execution is unavoidable, pass arguments as a list to `subprocess.run(..., shell=False)` and validate both the executable path and arguments against a strict, hardcoded allow-list.
 - **Path Traversal / Arbitrary File Access**:
   - Never trust user-provided paths or filenames directly.
-  - Canonicalize before checking: join the user value to the sandbox and resolve it to its absolute, symlink-free form with `pathlib.Path.resolve()` (or `os.path.realpath()`), so `..` segments, symlinks, and absolute user paths are collapsed first.
-  - **Strict Boundary Check (primary)**: On Python 3.9+, verify containment with `Path(target).resolve().is_relative_to(Path(sandbox).resolve())`, where `target` is `Path(sandbox) / user_path`, and reject the request when it returns `False`.
+  - Canonicalize before checking: join the user value to the sandbox and resolve it to its absolute, symlink-free form with `pathlib.Path.resolve()` (or `os.path.realpath()`), so `..` segments and symlinks are collapsed first (an absolute user path replaces the sandbox in the join, and the boundary check below then rejects it).
+  - **Strict Boundary Check (primary)**: On Python 3.9+, verify containment with `Path(target).resolve().is_relative_to(Path(sandbox).resolve())`, where `target` is `Path(sandbox) / user_path`, and reject the request when it returns `False`. It also accepts the sandbox root itself, so also require `target.is_file()` (or `target != sandbox`) when a file is expected.
   - **Fallback (Python < 3.9 only)**: `os.path.realpath(target).startswith(os.path.realpath(sandbox) + os.sep)`. The trailing `os.sep` prevents partial-prefix bypasses (e.g., `/sandbox-malicious` matching `/sandbox`); a bare `startswith(sandbox)` is not a boundary check.
   - `os.path.basename()` alone is **not** a boundary check: it strips directory components but neither resolves symlinks nor enforces containment. Use it only as extra filename normalization before the canonical boundary check.
 
@@ -77,22 +76,22 @@ This document outlines the mandatory secure coding practices for Python applicat
 - **Context-Aware Encoding**: HTML-body escaping does not protect other contexts; encode for the exact sink:
   - HTML attributes: always quote attribute values and escape them; never place untrusted data in event-handler attributes (`onclick`, `onerror`) or `style`.
   - JavaScript: pass data as JSON with Jinja2 `{{ data|tojson }}` or Django `{{ data|json_script:"data-id" }}`, never by interpolating values into `<script>` blocks.
-  - URLs: percent-encode components with `urllib.parse.quote()` and allow-list schemes (`https`, `mailto`) before rendering into `href`/`src`, which blocks `javascript:` URLs.
+  - URLs: percent-encode path segments with `urllib.parse.quote(value, safe="")` and query strings with `urllib.parse.urlencode()`, and allow-list schemes (`https`, `mailto`) before rendering into `href`/`src`, which blocks `javascript:` URLs.
 - **Rich Text**: When users must submit HTML, sanitize it server-side with a vetted allow-list sanitizer such as `nh3` (or `bleach` in legacy code), restricting tags, attributes, and URL schemes. **Never** write a custom regex-based HTML sanitizer.
-- **Content Security Policy**: Send a `Content-Security-Policy` header (e.g., nonce-based `script-src 'nonce-...'; object-src 'none'; base-uri 'none'`) without `'unsafe-inline'`, plus `X-Content-Type-Options: nosniff`. Serve API responses with `Content-Type: application/json`, never `text/html`.
+- **Content Security Policy**: Send a `Content-Security-Policy` header (e.g., `script-src 'nonce-{nonce}' 'strict-dynamic'; object-src 'none'; base-uri 'none'` with a fresh per-response nonce from `secrets.token_urlsafe(16)`) without `'unsafe-inline'`, plus `X-Content-Type-Options: nosniff`. Serve API responses with `Content-Type: application/json`, never `text/html`.
 - **Client-Side Rendering**: Frontends must render API data with `textContent` or framework bindings that escape by default, **never** `innerHTML`, `outerHTML`, `document.write`, `dangerouslySetInnerHTML`, or `v-html`.
 
 ### 7. Authentication and Session Management
-- **Password Storage**: Hash passwords as defined in section 4 (Cryptography and Hashing) and verify them with the library's verify function (e.g., `argon2.PasswordHasher().verify`). **Never** store, log, or reversibly encrypt plaintext passwords.
-- **Constant-Time Comparison**: Compare tokens, API keys, and HMAC signatures with `hmac.compare_digest()`, **never** `==`, to prevent timing attacks.
+- **Password Storage**: Hash passwords as defined in section 4 (Cryptography and Hashing) and verify them with the library's verify function (e.g., `argon2.PasswordHasher().verify`, which raises `VerifyMismatchError` on a wrong password instead of returning `False`; call `check_needs_rehash()` after a successful login to upgrade the stored hash). **Never** store, log, or reversibly encrypt plaintext passwords.
+- **Constant-Time Comparison**: Compare tokens, API keys, and HMAC signatures as `bytes` with `hmac.compare_digest()` (it raises `TypeError` on non-ASCII `str`), **never** `==`, to prevent timing attacks.
 - **Brute-Force Protection**:
   - Rate-limit login, password-reset, and MFA endpoints per account and per client IP (e.g., `Flask-Limiter`, `django-axes`), with progressive delays or temporary account lockout.
   - Return generic errors (e.g., "Invalid username or password") that do not reveal whether an account exists.
 - **Multi-Factor Authentication**: Require MFA (e.g., WebAuthn or TOTP via `pyotp`) for administrative and other privileged accounts.
 - **Session Lifecycle**:
-  - Regenerate the session id on login and on any privilege change to prevent session fixation (Django `login()` rotates it; in Flask, call `session.clear()` before storing the authenticated identity).
+  - Regenerate the session id on login and on any privilege change to prevent session fixation (Django `login()` calls `cycle_key()`; Flask's default session is a signed client-side cookie that cannot be revoked server-side, so for revocable sessions use a server-side store such as Flask-Session and call `app.session_interface.regenerate(session)` on login; `session.clear()` alone keeps the same session id).
   - Invalidate the session server-side on logout and enforce idle and absolute timeouts.
-- **Cookie Flags**: Set session and auth cookies with `Secure`, `HttpOnly`, and `SameSite=Lax` (or `Strict`), e.g., Django `SESSION_COOKIE_SECURE = True`, `SESSION_COOKIE_HTTPONLY = True`, `SESSION_COOKIE_SAMESITE = "Lax"` (Flask uses the same setting names).
+- **Cookie Flags**: Set session and auth cookies with `Secure`, `HttpOnly`, and `SameSite=Lax` (or `Strict`), e.g., Django `SESSION_COOKIE_SECURE = True`, `SESSION_COOKIE_HTTPONLY = True`, `SESSION_COOKIE_SAMESITE = "Lax"` (Flask uses the same setting names), plus Django `CSRF_COOKIE_SECURE = True`, which defaults to `False`.
 - **CSRF Protection**: Protect every cookie-authenticated state-changing request (`POST`, `PUT`, `PATCH`, `DELETE`) with CSRF tokens (Django `CsrfViewMiddleware`, Flask-WTF `CSRFProtect`). **Never** change state on `GET`, and never `@csrf_exempt` a cookie-authenticated view.
 - **Password Reset Tokens**: Generate them with `secrets.token_urlsafe(32)`, store only their hash, bind them to one account, make them single-use, expire them quickly (e.g., 15 to 60 minutes), and invalidate existing sessions after a successful reset.
 - **JWT Validation**:
@@ -103,7 +102,7 @@ This document outlines the mandatory secure coding practices for Python applicat
 - **Deny by Default**: Every route, view, and API endpoint requires authentication and an explicit permission unless it is deliberately marked public; new endpoints start locked.
 - **Server-Side Checks on Every Request**: Enforce authorization in the backend on each request. Hiding buttons, menu items, or routes in the UI is not access control.
 - **Object-Level Ownership Checks (IDOR)**:
-  - Scope every lookup to the caller, e.g., `Invoice.objects.get(pk=invoice_id, owner=request.user)` or `session.query(Invoice).filter_by(id=invoice_id, owner_id=current_user.id).one_or_none()`, and return 404 when nothing matches.
+  - Scope every lookup to the caller, e.g., Django `get_object_or_404(Invoice, pk=invoice_id, owner=request.user)` or SQLAlchemy `session.query(Invoice).filter_by(id=invoice_id, owner_id=current_user.id).one_or_none()`, and return 404 when nothing matches.
   - **Never** fetch a record by a client-supplied id alone; apply the same check to reads, updates, deletes, and file downloads.
 - **Centralized Role and Permission Checks**: Implement checks once in a decorator, middleware, or dependency (e.g., a custom `@require_role("admin")`, Django `@permission_required`, DRF permission classes, FastAPI `Depends`) instead of ad-hoc `if` statements scattered across handlers.
 - **Never Trust Client-Supplied Identity**:
