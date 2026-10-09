@@ -27,7 +27,7 @@ This skill is based on classic TDD methodologies (such as Kent Beck's *Test-Driv
    - Clean up the code, remove duplication, and improve names/structures.
    - Re-run the tests after every change to ensure no regressions are introduced.
 5. **PUSH**:
-   - Once all tests are green and the refactoring is complete, summarize the change and the test results, and ask the user for explicit confirmation before running `git push`. Never push autonomously: a push publishes code to a shared remote, which is a state-changing action that requires human approval (see the human-in-the-loop guidance in the **Secure Coding Guidelines Skill**).
+   - Once all tests are green and the refactoring is complete, summarize the change and the test results, and ask the user for explicit confirmation before running `git push`. Never push autonomously: a push publishes code to a shared remote, which is a state-changing action that requires human approval (see the human-in-the-loop guidance in the **secure-coding skill**).
    - After the user approves, run `git push` to trigger the pre-push security verification hook. If the hook blocks the push, return to RED with the reported findings.
 
 ## The Prove-It Pattern (Security Remediations)
