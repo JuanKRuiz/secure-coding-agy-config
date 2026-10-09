@@ -1,6 +1,19 @@
 ---
 name: secure-coding
-description: Mandatory secure coding guidelines for Python applications and AI/LLM agents (OWASP Top 10, OWASP Top 10 for LLM Applications) covering input validation, injection prevention, serialization, cryptography, and agentic tool security. Use whenever writing or reviewing code that handles untrusted input, database queries, file paths, shell commands, serialization, cryptography, or agent tool permissions.
+description: >-
+  Applies mandatory secure coding guidelines for Python applications and AI
+  agents built with an Agent Development Kit, covering the OWASP Top 10 and
+  the OWASP Top 10 for LLM Applications: input validation, SQL and command
+  injection, path traversal, unsafe deserialization, cryptography, dependency
+  pinning, least-privilege tools, prompt injection, human-in-the-loop
+  approval, audit logging, and secrets management. Use when writing, fixing,
+  or reviewing Python code that handles untrusted input, builds database
+  queries, file paths, or shell commands, deserializes data, or hashes or
+  encrypts secrets; when designing an agent's tools, permissions, or
+  guardrails; or during the GREEN step of a security fix. Don't use for
+  mapping a component's attack surface before coding (use threat-modeling),
+  for writing the failing tests first (use test-driven-development), or as the
+  only reference for non-Python code.
 ---
 
 # Secure Coding Guidelines

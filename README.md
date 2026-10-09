@@ -90,9 +90,9 @@ secure-coding-agy-config/
 │       ├── rules/
 │       │   └── security_workflow.md
 │       └── skills/
-│           ├── test_driven_development/SKILL.md
-│           ├── threat_modeling/SKILL.md
-│           └── secure_coding/SKILL.md
+│           ├── test-driven-development/SKILL.md
+│           ├── threat-modeling/SKILL.md
+│           └── secure-coding/SKILL.md
 ├── claude-code/
 │   ├── CLAUDE.md                      # for Claude Code, copy this file...
 │   └── .claude/                       # ...and this whole folder, both to your workspace root
@@ -128,11 +128,11 @@ your-workspace/
 │   ├── rules/
 │   │   └── security_workflow.md
 │   └── skills/
-│       ├── test_driven_development/
+│       ├── test-driven-development/
 │       │   └── SKILL.md
-│       ├── threat_modeling/
+│       ├── threat-modeling/
 │       │   └── SKILL.md
-│       └── secure_coding/
+│       └── secure-coding/
 │           └── SKILL.md
 └── sample_app/ (for testing/practice)
 ```
@@ -140,7 +140,7 @@ your-workspace/
 **Claude Code**: copy `claude-code/CLAUDE.md` and `claude-code/.claude/` from this repo to the root of your workspace, flattening them so `CLAUDE.md` and `.claude/` sit directly at your workspace root. Claude Code uses the same three primitives as Antigravity, just under different names and paths; `rules/` has no direct equivalent, so the always-on instruction lives in `CLAUDE.md` instead, which Claude Code loads into every session automatically.
 
 Key differences from the Antigravity layout:
-- **Skills** are a direct port, just with `name`/`description` frontmatter added and directories renamed to kebab-case (`secure-coding`, `threat-modeling`, `test-driven-development`) per Claude Code convention. Claude invokes them automatically when relevant, or explicitly via `/secure-coding`, `/threat-modeling`, `/test-driven-development`.
+- **Skills** are a direct port: both layouts use the same kebab-case directory names (`secure-coding`, `threat-modeling`, `test-driven-development`) and identical `name`/`description` frontmatter, as required by the open [Agent Skills](https://agentskills.io) format that both agents read (`name` must match the directory). The description is what each agent matches against the request to auto-load a skill, so it states what the skill does, when to use it, and when to use a sibling skill instead. Claude also lets you invoke them explicitly via `/secure-coding`, `/threat-modeling`, `/test-driven-development`.
 - **Rules** (`trigger: always_on`) there's no separate "rules" config in Claude Code, so we put these in top-level CLAUDE.md
 - **Hooks** move from a standalone `.agents/hooks.json` to the `"hooks"` key inside `.claude/settings.json`. The matcher targets the `Bash` tool (there's no dedicated `git push` tool), and an `if: "Bash(git push*)"` filter on the hook handler restricts it to push commands specifically. See [Installation & Setup: Claude Code](#installation--setup-claude-code) for the full config and the I/O differences this creates for the hook script.
 

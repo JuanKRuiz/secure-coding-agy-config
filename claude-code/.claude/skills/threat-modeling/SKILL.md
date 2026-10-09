@@ -1,6 +1,16 @@
 ---
 name: threat-modeling
-description: Threat modeling workflow to map entry points, trust boundaries, and sensitive data paths and produce a threat_model.md artifact. Use at the start of a security review, or when planning a component that handles untrusted input or crosses a trust boundary.
+description: >-
+  Maps a component's entry points, trust boundaries, and sensitive data paths
+  and records the resulting threats in a threat_model.md artifact at the
+  workspace root, which drives the security tests written during test-driven
+  development. Use when starting a security review, planning a feature or
+  endpoint that accepts untrusted input or crosses an authentication or
+  privilege boundary, triaging a reported vulnerability before fixing it, or
+  when asked what could go wrong, how an attacker could abuse a component, or
+  for an attack surface analysis. Don't use for line-level secure coding
+  guidance (use secure-coding), for writing or running the tests (use test-
+  driven-development), or for dependency vulnerability scanning.
 ---
 
 # Security Threat Model Skill
