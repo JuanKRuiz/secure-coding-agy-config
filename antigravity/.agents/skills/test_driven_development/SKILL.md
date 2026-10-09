@@ -40,4 +40,4 @@ When addressing a security vulnerability:
 4. **GREEN Step**: 
    - Apply the security patch (manually or via `cm fix`). Ensure the implementation adheres to the **Secure Coding Guidelines Skill**.
    - Verify that the exploit test now fails to compromise the system and all other tests pass (green).
-5. **PUSH Step**: Summarize the fix and the exploit test result, and ask the user for explicit confirmation before running `git push`; never push autonomously. After the user approves, run `git push` to trigger the pre-push security verification hook.
+5. **PUSH Step**: Summarize the fix and the exploit test result, and ask the user for explicit confirmation before running `git push`; never push autonomously. After the user approves, run `git push` to trigger the pre-push security verification hook. If the hook blocks the push, return to the RED step with the reported findings.
