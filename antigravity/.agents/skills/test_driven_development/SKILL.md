@@ -26,8 +26,9 @@ This skill is based on classic TDD methodologies (such as Kent Beck's *Test-Driv
 4. **REFACTOR**: 
    - Clean up the code, remove duplication, and improve names/structures.
    - Re-run the tests after every change to ensure no regressions are introduced.
-5. **PUSH**: 
-   - Once all tests are green and the refactoring is complete, run `git push` to trigger the pre-push security verification hook.
+5. **PUSH**:
+   - Once all tests are green and the refactoring is complete, summarize the change and the test results, and ask the user for explicit confirmation before running `git push`. Never push autonomously: a push publishes code to a shared remote, which is a state-changing action that requires human approval (see the human-in-the-loop guidance in the **Secure Coding Guidelines Skill**).
+   - After the user approves, run `git push` to trigger the pre-push security verification hook. If the hook blocks the push, return to RED with the reported findings.
 
 ## The Prove-It Pattern (Security Remediations)
 When addressing a security vulnerability:
@@ -39,4 +40,4 @@ When addressing a security vulnerability:
 4. **GREEN Step**: 
    - Apply the security patch (manually or via `cm fix`). Ensure the implementation adheres to the **Secure Coding Guidelines Skill**.
    - Verify that the exploit test now fails to compromise the system and all other tests pass (green).
-5. **PUSH Step**: Run `git push` to trigger the pre-push security verification hook.
+5. **PUSH Step**: Summarize the fix and the exploit test result, and ask the user for explicit confirmation before running `git push`; never push autonomously. After the user approves, run `git push` to trigger the pre-push security verification hook.
