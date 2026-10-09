@@ -28,7 +28,9 @@ flowchart TD
     Green --> GreenCheck{"Tests pass?"}
     GreenCheck -->|no| Green
     GreenCheck -->|yes| Refactor["REFACTOR — clean up,<br/>re-run full test suite"]
-    Refactor --> Push["git push"]
+    Refactor --> Confirm{"User approves push?"}
+    Confirm -->|no| Refactor
+    Confirm -->|yes| Push["git push"]
     Push --> ToolCheck{"cm / semgrep<br/>on PATH?"}
 
     subgraph Hook ["Security Gate Hook (PreToolUse on git push)"]
@@ -345,7 +347,7 @@ Antigravity: `antigravity/.agents/skills/` · Claude Code: `claude-code/.claude/
 
 ### 2. Workflow Enforcement Rules
 Antigravity: `antigravity/.agents/rules/security_workflow.md` · Claude Code: `claude-code/CLAUDE.md` (Claude Code has no separate "rules" primitive — always-on instructions live in `CLAUDE.md`, which is loaded into every session automatically):
-- **Security-Driven Development Workflow Rule**: An always-on workspace rule that guarantees the agent follows the correct sequence: Planning -> Threat Modeling (producing `threat_model.md`) -> Writing functional & security tests (RED step) -> Implementing secure code (GREEN step, utilizing the Secure Coding Guidelines skill) -> Verification and pushing. [`threat_model.md`](threat_model.md) at the repo root is a real example of this artifact - it documents the security gate hook itself (the one security-critical entry point in this repo), including why some of its design choices (severity-based fail-open, `cm verify` reserved for escalation only) are deliberate trade-offs, not oversights.
+- **Security-Driven Development Workflow Rule**: An always-on workspace rule that guarantees the agent follows the correct sequence: Planning -> Threat Modeling (producing `threat_model.md`) -> Writing functional & security tests (RED step) -> Implementing secure code (GREEN step, utilizing the secure-coding skill) -> Verification, then a user-approved push. [`threat_model.md`](threat_model.md) at the repo root is a real example of this artifact - it documents the security gate hook itself (the one security-critical entry point in this repo), including why some of its design choices (severity-based fail-open, `cm verify` reserved for escalation only) are deliberate trade-offs, not oversights.
 
 ### 3. Lifecycle Hooks
 There are two hooks configurations available for each agent:
