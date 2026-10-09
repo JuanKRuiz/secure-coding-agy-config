@@ -433,7 +433,7 @@ All of the following are optional environment variables (unset = the default sho
 |---|---|---|
 | `SECURITY_GATE_BLOCK_SEVERITY` | `HIGH` | Findings at/above this rank block; below it, they're advisory. Accepts CodeMender-style (`CRITICAL`/`HIGH`/`MEDIUM`/`LOW`) or Semgrep-style (`ERROR`/`WARNING`/`INFO`) severities. |
 | `SECURITY_GATE_ALLOW_ON_ERROR` | `false` | If `true`, a scanner infrastructure failure (ERROR outcome) lets the push through instead of blocking. Still logged/notified either way. |
-| `SECURITY_GATE_LARGE_FIX_LINES` | `50` | A `cm fix` diff larger than this (insertions + deletions) escalates for human review instead of being auto-committed. |
+| `SECURITY_GATE_LARGE_FIX_LINES` | `50` | A `cm fix` diff larger than this (insertions + deletions) escalates for human review instead of being auto-committed. For strict human approval set it to `0`: the check is a strict `>` on `git diff --shortstat`, so any fix that changes a tracked file escalates instead of being committed into a push the user already approved (a fix that only adds new files counts as 0 lines; `-1` escalates those too). |
 | `SECURITY_GATE_MAX_RETRIES` | `1` | How many times the CodeMender script retries `cm fix` + tests before escalating. |
 | `SECURITY_GATE_TEST_CMD` | `python3 -m unittest discover -s tests` | The command run for the GREEN step. Override for non-Python test suites. |
 | `SECURITY_GATE_NOTIFY_CMD` | *(unset)* | If set, invoked with a JSON event on stdin for ADVISORY/ERROR/BLOCKED outcomes - e.g. a small wrapper script that posts to Slack or files a ticket, so another team is actually looped in instead of relying on someone reading terminal output. |
