@@ -1,19 +1,21 @@
 ---
 name: secure-coding
 description: >-
-  Applies mandatory secure coding guidelines for Python applications and AI
-  agents built with an Agent Development Kit, covering the OWASP Top 10 and
-  the OWASP Top 10 for LLM Applications: input validation, SQL and command
-  injection, path traversal, unsafe deserialization, cryptography, dependency
-  pinning, least-privilege tools, prompt injection, human-in-the-loop
-  approval, audit logging, and secrets management. Use when writing, fixing,
-  or reviewing Python code that handles untrusted input, builds database
-  queries, file paths, or shell commands, deserializes data, or hashes or
-  encrypts secrets; when designing an agent's tools, permissions, or
-  guardrails; or during the GREEN step of a security fix. Don't use for
-  mapping a component's attack surface before coding (use threat-modeling),
-  for writing the failing tests first (use test-driven-development), or as the
-  only reference for non-Python code.
+  Applies mandatory secure coding rules for Python applications and ADK
+  agents: input validation, parameterized SQL, path canonicalization, safe
+  deserialization (pickle, YAML, XXE), password hashing, authenticated
+  encryption, secure randomness, dependency pinning and pip-audit scanning,
+  least-privilege and sandboxed agent tools, prompt injection defenses,
+  human-in-the-loop approval, audit logging, and secrets storage. Use when
+  writing or reviewing a specific Python function or diff that handles
+  untrusted input, builds SQL queries, file paths, or shell commands,
+  deserializes data, hashes passwords, encrypts data, generates tokens, or
+  stores API keys; when designing an agent's tools, permissions, or
+  guardrails; or during the GREEN step of a security fix. Don't use as the
+  entry point for fixing a vulnerability (use test-driven-development), for
+  starting a security review (use threat-modeling), or for XSS,
+  authentication, access control, or non-Python code, which these rules do not
+  cover.
 ---
 
 # Secure Coding Guidelines

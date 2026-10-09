@@ -1,15 +1,18 @@
 ---
 name: test-driven-development
 description: >-
-  Drives security-sensitive changes through a PLAN, RED, GREEN, REFACTOR, PUSH
-  cycle that writes a failing test before any production code, and applies the
-  Prove-It pattern to reproduce a vulnerability with a failing exploit test
-  before patching it. Use when fixing a security bug or reported
-  vulnerability, implementing or changing an entry point that handles
-  untrusted input, authentication, or authorization, or when asked to prove a
-  fix with a regression test. Don't use for documentation, configuration-only,
-  or formatting changes, for building the threat model itself (use threat-
-  modeling), or for the secure implementation rules applied during GREEN (use
+  Drives security fixes and security-critical changes through a PLAN, RED,
+  GREEN, REFACTOR, PUSH cycle: writes a failing test before any production
+  code, applies the Prove-It pattern to reproduce a vulnerability with a
+  failing exploit test before patching, and ends with a PUSH step that
+  triggers the pre-push security gate. Use when fixing a security bug or
+  reported vulnerability (SQL injection, path traversal, XSS, IDOR), adding or
+  changing authentication, authorization, or input-validation logic at an
+  entry point, or when asked to reproduce an exploit or prove a fix with a
+  regression test. Don't use for non-security bug fixes, refactors, or general
+  unit tests, for documentation, configuration-only, or formatting changes,
+  for threat modeling with no code change (use threat-modeling), or as the
+  source of the secure implementation rules applied during GREEN (use
   secure-coding).
 ---
 

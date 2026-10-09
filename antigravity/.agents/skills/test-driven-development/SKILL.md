@@ -1,15 +1,18 @@
 ---
 name: test-driven-development
 description: >-
-  Drives security-sensitive changes through a PLAN, RED, GREEN, REFACTOR, PUSH
-  cycle that writes a failing test before any production code, and applies the
-  Prove-It pattern to reproduce a vulnerability with a failing exploit test
-  before patching it. Use when fixing a security bug or reported
-  vulnerability, implementing or changing an entry point that handles
-  untrusted input, authentication, or authorization, or when asked to prove a
-  fix with a regression test. Don't use for documentation, configuration-only,
-  or formatting changes, for building the threat model itself (use threat-
-  modeling), or for the secure implementation rules applied during GREEN (use
+  Drives security fixes and security-critical changes through a PLAN, RED,
+  GREEN, REFACTOR, PUSH cycle: writes a failing test before any production
+  code, applies the Prove-It pattern to reproduce a vulnerability with a
+  failing exploit test before patching, and ends with a PUSH step that
+  triggers the pre-push security gate. Use when fixing a security bug or
+  reported vulnerability (SQL injection, path traversal, XSS, IDOR), adding or
+  changing authentication, authorization, or input-validation logic at an
+  entry point, or when asked to reproduce an exploit or prove a fix with a
+  regression test. Don't use for non-security bug fixes, refactors, or general
+  unit tests, for documentation, configuration-only, or formatting changes,
+  for threat modeling with no code change (use threat-modeling), or as the
+  source of the secure implementation rules applied during GREEN (use
   secure-coding).
 ---
 
@@ -28,7 +31,7 @@ This skill is based on classic TDD methodologies (such as Kent Beck's *Test-Driv
 ## The TDD Cycle (PRGR-P)
 1. **PLAN**: 
    - Outline the design, functional requirements, and testing strategy.
-   - Once the design plan is established, if the component handles untrusted input or security boundaries, utilize the **Threat Modeling Skill** to produce a `threat_model.md` artifact at the root of the workspace.
+   - Once the design plan is established, if the component handles untrusted input or security boundaries, utilize the **threat-modeling skill** to produce a `threat_model.md` artifact at the root of the workspace.
 2. **RED**: 
    - Write functional unit tests to assert the designed behaviors.
    - Write security edge-case tests targeting each entry point (input validation checks) and trust boundary (authentication/authorization checks) identified in the `threat_model.md` artifact.
@@ -36,7 +39,7 @@ This skill is based on classic TDD methodologies (such as Kent Beck's *Test-Driv
    - **Crucial**: Ensure the tests fail for the *expected reason* (assertion failure or expected exception) and not due to a syntax/import error in the test files.
 3. **GREEN**: 
    - Write or apply the minimal production code to make the tests pass.
-   - **Crucial**: When writing the implementation, refer to and follow the **Secure Coding Guidelines Skill** (e.g. input validation, parameterized queries, path canonicalization).
+   - **Crucial**: When writing the implementation, refer to and follow the **secure-coding skill** (e.g. input validation, parameterized queries, path canonicalization).
    - Run the tests to confirm they are now green.
 4. **REFACTOR**: 
    - Clean up the code, remove duplication, and improve names/structures.
@@ -47,11 +50,11 @@ This skill is based on classic TDD methodologies (such as Kent Beck's *Test-Driv
 ## The Prove-It Pattern (Security Remediations)
 When addressing a security vulnerability:
 1. **Identify**: Trace the vulnerability to the source file.
-2. **PLAN**: Establish a plan to resolve the issue. Run the **Threat Modeling Skill** to outline the entry points and threat matrix in the `threat_model.md` artifact.
+2. **PLAN**: Establish a plan to resolve the issue. Run the **threat-modeling skill** to outline the entry points and threat matrix in the `threat_model.md` artifact.
 3. **RED Step**: 
    - Refer to the `threat_model.md` entry points.
    - Write a test or script reproducing the exploit (e.g. attempting SQL injection or path traversal) and confirm that the vulnerability is triggered (test fails).
 4. **GREEN Step**: 
-   - Apply the security patch (manually or via `cm fix`). Ensure the implementation adheres to the **Secure Coding Guidelines Skill**.
+   - Apply the security patch (manually or via `cm fix`). Ensure the implementation adheres to the **secure-coding skill**.
    - Verify that the exploit test now fails to compromise the system and all other tests pass (green).
 5. **PUSH Step**: Run `git push` to trigger the pre-push security verification hook.
