@@ -339,9 +339,9 @@ Claude Code hooks and Antigravity hooks are the same *concept* (a `PreToolUse` h
 
 ### 1. Security-Focused Agent Skills
 Antigravity: `antigravity/.agents/skills/` · Claude Code: `claude-code/.claude/skills/` (same `SKILL.md` format, kebab-case directory names):
-- **Threat Modeling Skill**: Guides the agent to identify components, map entry points, trust boundaries, and trace data paths before making design or security decisions.
-- **Test-Driven Development (TDD) / Prove-It Skill**: Enforces writing a failing reproduction test (RED) before fixing a bug, and verifying that the fix successfully passes the test (GREEN) without breaking regressions.
-- **Secure Coding Guidelines**: Guides the agent to validate inputs against allow-lists, prevent SQL injection via parameterized queries, and resolve absolute paths using canonicalization.
+- **`threat-modeling`**: Maps a component's entry points, trust boundaries, and sensitive data paths, and writes or updates a `threat_model.md` artifact (entry points, trust-boundary checks, threat matrix) that `test-driven-development` turns into security tests.
+- **`test-driven-development`** (includes the Prove-It pattern): Drives security fixes through a PLAN, RED, GREEN, REFACTOR, PUSH cycle: writes a failing exploit/reproduction test (RED) before patching, verifies the fix passes it (GREEN) without breaking regressions, and ends with a PUSH step that triggers the pre-push security gate.
+- **`secure-coding`**: Mandatory secure coding rules specific to Python applications and ADK agents: allow-list input validation, parameterized SQL, path canonicalization, safe deserialization, password hashing and encryption, dependency scanning, and OWASP LLM prompt-injection and excessive-agency defenses.
 
 ### 2. Workflow Enforcement Rules
 Antigravity: `antigravity/.agents/rules/security_workflow.md` · Claude Code: `claude-code/CLAUDE.md` (Claude Code has no separate "rules" primitive — always-on instructions live in `CLAUDE.md`, which is loaded into every session automatically):
@@ -559,6 +559,6 @@ The [offline mocked suite](#testing-the-gate-scripts-offline) (`tests/run_tests.
 
 ## Credits & References
 
-- **Test-Driven Development (TDD) Skill**: Inspired by and adapted from classic TDD methodologies:
+- **`test-driven-development` skill**: Inspired by and adapted from classic TDD methodologies:
   - *Test-Driven Development: By Example* by Kent Beck.
   - *Three Laws of TDD* by Robert C. Martin (Uncle Bob).
