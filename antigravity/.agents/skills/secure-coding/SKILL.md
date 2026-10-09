@@ -5,8 +5,8 @@ description: >-
   agents: input validation, parameterized SQL, path canonicalization, safe
   deserialization (pickle, YAML, XXE), password hashing, authenticated
   encryption, secure randomness, dependency pinning and pip-audit scanning,
-  OWASP LLM01/LLM08 defenses (prompt injection, least-privilege and sandboxed
-  agent tools), human-in-the-loop approval, audit logging, and secrets
+  OWASP LLM prompt injection and excessive agency defenses (least-privilege,
+  sandboxed tools), human-in-the-loop approval, audit logging, and secrets
   storage. Use when writing or reviewing a specific Python function or diff
   that handles untrusted input, builds SQL queries, file paths, or shell
   commands, deserializes data, hashes passwords, encrypts data, generates
