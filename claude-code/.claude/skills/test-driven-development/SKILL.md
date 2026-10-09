@@ -33,9 +33,10 @@ This skill is based on classic TDD methodologies (such as Kent Beck's *Test-Driv
    - Re-run the tests after every change to ensure no regressions are introduced.
 5. **PUSH**:
    - Once all tests are green and the refactoring is complete, summarize the change and the test results, and ask the user for explicit confirmation before running `git push`. Never push autonomously: a push publishes code to a shared remote, which is a state-changing action that requires human approval (see the human-in-the-loop guidance in the **secure-coding skill**).
+   - Before asking, make sure `git status --porcelain` is empty: commit the tests and code you intend to ship, and add `.security-gate/` to `.gitignore` if it is missing. The gate commits its fix with `git add -A`, so any untracked file left behind would be swept into that commit.
    - When asking for confirmation, tell the user that the pre-push security gate may add an automated fix commit (`security: automated fix ...`) to this push if it auto-fixes a blocking finding.
-   - After the user approves, run `git push` to trigger the pre-push security verification hook. If the hook blocks the push, return to RED with the reported findings.
-   - After the push, report the gate outcome to the user (PASS, ADVISORY, or FIXED). If it was FIXED, show the commit the gate added with `git log -1 --stat` (one commit per fixed finding; widen `-1` if it fixed several).
+   - After the user approves, record `git rev-parse HEAD`, then run `git push` to trigger the pre-push security verification hook. If the hook blocks the push, return to RED with the reported findings.
+   - After the push, report the gate outcome to the user (PASS, ADVISORY, FIXED, or ERROR; an ERROR only lets the push through when `SECURITY_GATE_ALLOW_ON_ERROR=true`) and show `git log --stat <recorded>..HEAD`, which lists every commit the gate added (zero, one, or several).
 
 ## The Prove-It Pattern (Security Remediations)
 When addressing a security vulnerability:
@@ -47,4 +48,4 @@ When addressing a security vulnerability:
 4. **GREEN Step**:
    - Apply the security patch (manually or via `cm fix`). Ensure the implementation adheres to the **secure-coding skill**.
    - Verify that the exploit test now fails to compromise the system and all other tests pass (green).
-5. **PUSH Step**: Summarize the fix and the exploit test result, and ask the user for explicit confirmation before running `git push`, telling them the pre-push security gate may add an automated fix commit to the push; never push autonomously. After the user approves, run `git push` to trigger the pre-push security verification hook. If the hook blocks the push, return to the RED step with the reported findings. After the push, report the gate outcome and, if it was FIXED, show the added commit with `git log -1 --stat`.
+5. **PUSH Step**: Make sure `git status --porcelain` is empty (commit what you intend to ship and add `.security-gate/` to `.gitignore` if it is missing), because the gate's fix commit uses `git add -A`. Summarize the fix and the exploit test result, and ask the user for explicit confirmation before running `git push`, telling them the pre-push security gate may add an automated fix commit to the push; never push autonomously. After the user approves, record `git rev-parse HEAD`, then run `git push` to trigger the pre-push security verification hook. If the hook blocks the push, return to the RED step with the reported findings. After the push, report the gate outcome (PASS, ADVISORY, FIXED, or ERROR when `SECURITY_GATE_ALLOW_ON_ERROR=true`) and show `git log --stat <recorded>..HEAD`.
