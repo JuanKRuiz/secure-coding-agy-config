@@ -140,7 +140,8 @@ while IFS= read -r finding <&3; do
 
   RETRY_COUNT=0
   RESOLVED=false
-  LARGE_DIFF=false
+  LARGE_DIFF=false    # true = the fix passed tests + rescan but must not be auto-committed (ESCALATE_HINT says why)
+  ESCALATE_HINT=""
 
   while [ $RETRY_COUNT -le "$SECURITY_GATE_MAX_RETRIES" ]; do
     echo "Attempting cm fix for: $FINDING_ID (Attempt: $((RETRY_COUNT+1)))" >&2
@@ -191,11 +192,26 @@ while IFS= read -r finding <&3; do
 
     # Don't blindly auto-commit an oversized generated patch - escalate
     # for human review instead (this is where `cm verify` may get used).
-    # Size = insertions + deletions over exactly the files cm fix changed,
-    # new files included (a fix that only adds files is not "0 lines").
+    # Escalate instead of auto-committing when the fix cannot be committed
+    # cleanly or trusted without review:
+    #  - it changed files whose pre-fix content already differed from HEAD
+    #    (uncommitted/staged edits, or pre-existing untracked files): the
+    #    gate commit must never carry the user's own edits;
+    #  - it changed binary files, which cannot be reviewed by line count
+    #    (treated as exceeding SECURITY_GATE_LARGE_FIX_LINES);
+    #  - its size (insertions + deletions over exactly the files cm fix
+    #    changed, new files included) exceeds SECURITY_GATE_LARGE_FIX_LINES.
     CHANGED_LINES=$GATE_FIX_CHANGED_LINES
-    if [ "$CHANGED_LINES" -gt "$SECURITY_GATE_LARGE_FIX_LINES" ]; then
+    if [ "${#GATE_FIX_DIRTY_FILES[@]}" -gt 0 ]; then
+      ESCALATE_HINT="cm fix changed file(s) that already had uncommitted edits or were untracked before the fix (${GATE_FIX_DIRTY_FILES[*]}); commit or stash those edits first ('git stash -u' also covers untracked files) so the gate commit never carries them, then retry the push"
+    elif [ "${#GATE_FIX_BINARY_FILES[@]}" -gt 0 ]; then
+      ESCALATE_HINT="the fix changes binary file(s) (${GATE_FIX_BINARY_FILES[*]}) that cannot be reviewed by line count, so it is treated as exceeding SECURITY_GATE_LARGE_FIX_LINES=$SECURITY_GATE_LARGE_FIX_LINES"
+    elif [ "$CHANGED_LINES" -gt "$SECURITY_GATE_LARGE_FIX_LINES" ]; then
       echo "Fix diff is large ($CHANGED_LINES lines in ${#GATE_FIX_FILES[@]} file(s) > $SECURITY_GATE_LARGE_FIX_LINES) - escalating for human review instead of auto-committing." >&2
+      ESCALATE_HINT="fix diff too large to auto-trust without review ($CHANGED_LINES lines in ${#GATE_FIX_FILES[@]} file(s) > SECURITY_GATE_LARGE_FIX_LINES=$SECURITY_GATE_LARGE_FIX_LINES)"
+    fi
+    if [ -n "$ESCALATE_HINT" ]; then
+      echo "Not auto-committing the fix for $FINDING_ID: $ESCALATE_HINT." >&2
       revert_fix
       LARGE_DIFF=true
       break
@@ -226,7 +242,11 @@ while IFS= read -r finding <&3; do
   # fix diff was too large to auto-trust.
   if [ "$RESOLVED" != true ]; then
     REASON_HINT="auto-fix could not make tests (and a rescan) pass"
-    [ "$LARGE_DIFF" = true ] && REASON_HINT="fix diff too large to auto-trust without review"
+    DENY_DETAIL=""
+    if [ "$LARGE_DIFF" = true ]; then
+      REASON_HINT="$ESCALATE_HINT"
+      DENY_DETAIL=" The auto-fix was reverted, not committed: $ESCALATE_HINT."
+    fi
     echo "Escalating $FINDING_ID to human review ($REASON_HINT)." >&2
     echo "Select action for finding $FINDING_ID:" >&2
     echo "1) Defer/mute with justification (logged + notified; push proceeds)" >&2
@@ -258,7 +278,7 @@ while IFS= read -r finding <&3; do
             notify "BLOCKED - HELP NEEDED" "Finding $FINDING_ID confirmed exploitable by cm verify and could not be auto-fixed. Push blocked - needs help from another team." \
               "$(jq -n --argjson f "$finding" '{findings:[$f]}')"
             rm -rf "$WORK_DIR"
-            deny "Exploitable vulnerability $FINDING_ID confirmed by 'cm verify' and could not be auto-fixed. See $SECURITY_GATE_LOG - loop in security/another team for help before pushing."
+            deny "Exploitable vulnerability $FINDING_ID confirmed by 'cm verify' and could not be auto-fixed.$DENY_DETAIL See $SECURITY_GATE_LOG - loop in security/another team for help before pushing."
           fi
         else
           echo "cm verify found this non-exploitable - treating as advisory and proceeding." >&2
@@ -270,7 +290,7 @@ while IFS= read -r finding <&3; do
         revert_fix
         log_event "BLOCKED" "codemender" "$(jq -n --argjson f "$finding" '{findings:[$f], reason:"unresolved - no fix, deferral, or verification decision"}')"
         rm -rf "$WORK_DIR"
-        deny "Unresolved finding $FINDING_ID ($SEV): no fix, deferral, or verification decision was made. See $SECURITY_GATE_LOG."
+        deny "Unresolved finding $FINDING_ID ($SEV): no fix, deferral, or verification decision was made.$DENY_DETAIL See $SECURITY_GATE_LOG."
         ;;
     esac
   fi

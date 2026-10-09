@@ -28,6 +28,11 @@ setup_repo() {
     git config user.email "dev@example.com"
     git config user.name "Test Dev"
     git config core.autocrlf false
+    # run_hook captures the hook's stdout/stderr into .hook_* files inside
+    # the repo while the hook runs. Ignore them, as real agent runs capture
+    # through pipes: the gate snapshots untracked files around `cm fix`, and
+    # a capture file growing during the fix would look like a fix edit.
+    printf '.hook_*\n' >> .git/info/exclude
     echo "print('hello')" > README.txt
     git add README.txt
     git commit -q -m "initial"
@@ -331,6 +336,52 @@ test_cm_failed_fix_revert_keeps_prior_edits() {
   cleanup_repo "$repo"
 }
 
+test_cm_fix_editing_preexisting_untracked_file_escalates() {
+  local repo; repo=$(setup_repo)
+  echo "scratch notes" > "$repo/notes.txt"
+  local head_before; head_before=$(cd "$repo" && git rev-parse HEAD)
+  MOCK_CM_FIX_APPEND_FILE="notes.txt" SECURITY_GATE_TEST_CMD=true MOCK_CM_REPORT_MODE=high \
+    run_hook "$AGENTS_DIR/security_gate_hook.sh" "$repo"
+  assert_eq "cm: fix that edits a pre-existing untracked file escalates + denies" "deny" "$(decision "$repo")"
+  assert_contains "cm: deny reason says to commit or stash the edits first" "$(reason "$repo")" "commit or stash"
+  assert_contains "cm: deny reason names the pre-existing untracked file" "$(reason "$repo")" "notes.txt"
+  assert_eq "cm: no gate commit when a pre-existing untracked file was edited" \
+    "$head_before" "$(cd "$repo" && git rev-parse HEAD)"
+  assert_eq "cm: revert restores the pre-existing untracked file's exact content" \
+    "scratch notes" "$(cat "$repo/notes.txt" 2>/dev/null)"
+  assert_eq "cm: revert restores vuln.py too" "" "$(cd "$repo" && git status --porcelain -- vuln.py)"
+  cleanup_repo "$repo"
+}
+
+test_cm_binary_fix_escalates() {
+  local repo; repo=$(setup_repo)
+  local head_before; head_before=$(cd "$repo" && git rev-parse HEAD)
+  MOCK_CM_FIX_BINARY_FILE="assets/patch.bin" SECURITY_GATE_TEST_CMD=true MOCK_CM_REPORT_MODE=high \
+    run_hook "$AGENTS_DIR/security_gate_hook.sh" "$repo"
+  assert_eq "cm: fix with a binary file escalates + denies even below LARGE_FIX_LINES" "deny" "$(decision "$repo")"
+  assert_contains "cm: deny reason explains binary files cannot be reviewed by line count" \
+    "$(reason "$repo")" "binary file(s) (assets/patch.bin)"
+  assert_eq "cm: no gate commit for a binary fix" "$head_before" "$(cd "$repo" && git rev-parse HEAD)"
+  assert_eq "cm: binary file created by the reverted fix is removed" \
+    "absent" "$([ -e "$repo/assets/patch.bin" ] && echo present || echo absent)"
+  cleanup_repo "$repo"
+}
+
+test_cm_fix_on_file_with_uncommitted_edits_escalates() {
+  local repo; repo=$(setup_repo)
+  echo "user wip line" >> "$repo/vuln.py"
+  local head_before; head_before=$(cd "$repo" && git rev-parse HEAD)
+  SECURITY_GATE_TEST_CMD=true MOCK_CM_REPORT_MODE=high \
+    run_hook "$AGENTS_DIR/security_gate_hook.sh" "$repo"
+  assert_eq "cm: fix on a file with uncommitted edits escalates + denies" "deny" "$(decision "$repo")"
+  assert_contains "cm: deny reason says to commit or stash the edits first" "$(reason "$repo")" "commit or stash"
+  assert_eq "cm: user edits are never committed inside a gate commit" \
+    "$head_before" "$(cd "$repo" && git rev-parse HEAD)"
+  assert_eq "cm: revert restores the user's uncommitted edits exactly" \
+    "$(printf '%s\n%s' '# a file that a scanner will flag' 'user wip line')" "$(cat "$repo/vuln.py")"
+  cleanup_repo "$repo"
+}
+
 test_semgrep_pass_no_findings() {
   local repo; repo=$(setup_repo)
   MOCK_SEMGREP_MODE=clean run_hook "$AGENTS_DIR/security_gate_hook_semgrep.sh" "$repo"
@@ -393,6 +444,9 @@ for t in \
   test_cm_new_file_only_large_fix_escalates \
   test_cm_small_tracked_fix_still_committed \
   test_cm_failed_fix_revert_keeps_prior_edits \
+  test_cm_fix_editing_preexisting_untracked_file_escalates \
+  test_cm_binary_fix_escalates \
+  test_cm_fix_on_file_with_uncommitted_edits_escalates \
   test_semgrep_pass_no_findings \
   test_semgrep_error_blocks_by_default \
   test_semgrep_error_allow_on_error_true \
