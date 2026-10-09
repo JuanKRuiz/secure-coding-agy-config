@@ -39,6 +39,13 @@ deny() {
   exit 0
 }
 
+# Returns 0 if the command string contains a `git ... push` invocation
+# (including global git flags like `git -C /repo push` or `git --no-pager push`),
+# while ignoring quoted strings like `echo "git push"` or `git commit -m "git push"`.
+is_git_push_command() {
+  printf '%s\n' "$1" | grep -Eq '(^|[;&|[:space:]])git([[:space:]]+(-[a-zA-Z0-9._=-]+|[a-zA-Z0-9._/-]+))*[[:space:]]+push([[:space:]]|$)'
+}
+
 # When Antigravity invokes a PreToolUse hook for run_command, it pipes a JSON
 # payload on stdin with .toolCall.args.CommandLine. If a JSON payload is
 # present and the command is not `git push`, allow immediately. If stdin is
@@ -52,12 +59,13 @@ check_git_push_stdin() {
   if [ -z "${input//[[:space:]]/}" ]; then
     return 0
   fi
-  if echo "$input" | jq -e 'type == "object" and (.toolCall != null or .tool_input != null)' >/dev/null 2>&1; then
-    cmd=$(echo "$input" | jq -r '.toolCall.args.CommandLine // .toolCall.args.command // .tool_input.command // empty' 2>/dev/null)
-    case "$cmd" in
-      *"git push"*) return 0 ;;
-      *) allow ;;
-    esac
+  if printf '%s\n' "$input" | jq -e 'type == "object" and (.toolCall != null or .tool_input != null)' >/dev/null 2>&1; then
+    cmd=$(printf '%s\n' "$input" | jq -r '.toolCall?.args?.CommandLine? // .toolCall?.args?.command? // .tool_input?.command? // empty' 2>/dev/null || true)
+    if is_git_push_command "$cmd"; then
+      return 0
+    else
+      allow
+    fi
   fi
 }
 
@@ -67,10 +75,12 @@ check_git_push_stdin() {
 prompt_user() {
   local __var_name="$1" __prompt="$2" __ans=""
   if [ "$SECURITY_GATE_INTERACTIVE" = "true" ]; then
-    if [ -r /dev/tty ] && [ -w /dev/tty ]; then
+    if ( : </dev/tty >/dev/tty ) 2>/dev/null; then
       read -r -p "$__prompt" __ans < /dev/tty > /dev/tty 2>&1 || __ans=""
+    elif [ -t 0 ]; then
+      read -r -p "$__prompt" __ans || __ans=""
     else
-      read -r -p "$__prompt" __ans 2>&2 || __ans=""
+      __ans=""
     fi
   fi
   printf -v "$__var_name" '%s' "$__ans"

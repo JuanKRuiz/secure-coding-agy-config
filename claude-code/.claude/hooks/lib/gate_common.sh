@@ -40,13 +40,19 @@ deny() {
 prompt_user() {
   local __var_name="$1" __prompt="$2" __ans=""
   if [ "$SECURITY_GATE_INTERACTIVE" = "true" ]; then
-    if [ -r /dev/tty ] && [ -w /dev/tty ]; then
+    if ( : </dev/tty >/dev/tty ) 2>/dev/null; then
       read -r -p "$__prompt" __ans < /dev/tty > /dev/tty 2>&1 || __ans=""
+    elif [ -t 0 ]; then
+      read -r -p "$__prompt" __ans || __ans=""
     else
-      read -r -p "$__prompt" __ans 2>&2 || __ans=""
+      __ans=""
     fi
   fi
   printf -v "$__var_name" '%s' "$__ans"
+}
+
+is_git_push_command() {
+  printf '%s\n' "$1" | grep -Eq '(^|[;&|[:space:]])git([[:space:]]+(-[a-zA-Z0-9._=-]+|[a-zA-Z0-9._/-]+))*[[:space:]]+push([[:space:]]|$)'
 }
 
 # --- Severity ---

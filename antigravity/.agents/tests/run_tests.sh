@@ -43,10 +43,10 @@ run_hook() {
   local state_dir
   state_dir=$(mktemp -d)
   (
-    cd "$repo" || exit 1
+    cd "${HOOK_RUN_CWD:-$repo}" || exit 1
     PATH="$MOCK_BIN:$PATH" \
     MOCK_STATE_DIR="$state_dir" \
-    MOCK_FILE="vuln.py" \
+    MOCK_FILE="${MOCK_FILE:-vuln.py}" \
     SECURITY_GATE_STATE_DB="$repo/.codemender-test/state.db" \
     bash "$script" <<< "$stdin_payload" > "$repo/.hook_stdout" 2> "$repo/.hook_stderr"
     echo $? > "$repo/.hook_exit"
@@ -116,6 +116,18 @@ test_cm_stdin_push_command_triggers_scan() {
   cleanup_repo "$repo"
 }
 
+test_cm_stdin_git_flag_push_and_malformed_json() {
+  local repo; repo=$(setup_repo)
+  MOCK_CM_REPORT_MODE=error run_hook "$AGENTS_DIR/security_gate_hook.sh" "$repo" \
+    '{"toolCall":{"name":"run_command","args":{"CommandLine":"git -C /repo push origin main"}}}'
+  assert_eq "cm: git -C /repo push triggers scan" "deny" "$(decision "$repo")"
+
+  MOCK_CM_REPORT_MODE=error run_hook "$AGENTS_DIR/security_gate_hook.sh" "$repo" \
+    '{"toolCall":"not-an-object"}'
+  assert_eq "cm: malformed non-object toolCall allows without set -e crash" "allow" "$(decision "$repo")"
+  cleanup_repo "$repo"
+}
+
 test_cm_error_blocks_by_default() {
   local repo; repo=$(setup_repo)
   MOCK_CM_REPORT_MODE=error run_hook "$AGENTS_DIR/security_gate_hook.sh" "$repo"
@@ -163,6 +175,43 @@ test_cm_legacy_pascal_schema_autofix_commits() {
   cleanup_repo "$repo"
 }
 
+test_cm_other_vuln_suffix_does_not_false_match() {
+  local repo; repo=$(setup_repo)
+  MOCK_REPORT_FILE="other_vuln.py" MOCK_CM_REPORT_MODE=high \
+    run_hook "$AGENTS_DIR/security_gate_hook.sh" "$repo"
+  assert_eq "cm: finding in other_vuln.py does not match modified vuln.py" "allow" "$(decision "$repo")"
+  cleanup_repo "$repo"
+}
+
+test_cm_windows_backslash_path_normalizes_and_commits() {
+  local repo; repo=$(setup_repo)
+  (
+    cd "$repo" || exit 1
+    mkdir -p sub
+    echo "x = 1" > sub/vuln.py
+    git add sub/vuln.py
+    git commit -q -m "add sub/vuln.py"
+  )
+  MOCK_FILE="sub/vuln.py" MOCK_REPORT_FILE='sub\\vuln.py' \
+  SECURITY_GATE_TEST_CMD=true MOCK_CM_REPORT_MODE=high \
+    run_hook "$AGENTS_DIR/security_gate_hook.sh" "$repo"
+  assert_eq "cm: Windows backslash file_path normalizes and allows after fix" "allow" "$(decision "$repo")"
+  assert_contains "cm: Windows backslash fix logged as FIXED" "$(log_events "$repo")" "FIXED"
+  cleanup_repo "$repo"
+}
+
+test_cm_rescan_reopened_status_blocks_and_reverts() {
+  local repo; repo=$(setup_repo)
+  MOCK_CM_RESCAN_REOPENED=true SECURITY_GATE_TEST_CMD=true MOCK_CM_REPORT_MODE=high \
+    run_hook "$AGENTS_DIR/security_gate_hook.sh" "$repo"
+  assert_eq "cm: REOPENED status on rescan is not treated as fixed and denies" "deny" "$(decision "$repo")"
+  assert_contains "cm: REOPENED rescan finding logged as BLOCKED" "$(log_events "$repo")" "BLOCKED"
+  local vuln_status
+  vuln_status=$(cd "$repo" && git status --porcelain -- vuln.py)
+  assert_eq "cm: REOPENED rescan reverts modified vuln.py" "" "$vuln_status"
+  cleanup_repo "$repo"
+}
+
 test_cm_blocking_retries_exhausted_no_tty_fails_closed() {
   local repo; repo=$(setup_repo)
   echo "uncommitted work" >> "$repo/README.txt"
@@ -193,6 +242,17 @@ test_cm_mixed_severity_fixes_blocking_logs_advisory() {
   assert_eq "cm: mixed severities still allow after fix" "allow" "$(decision "$repo")"
   assert_contains "cm: mixed severities log FIXED" "$(log_events "$repo")" "FIXED"
   assert_contains "cm: mixed severities log ADVISORY" "$(log_events "$repo")" "ADVISORY"
+  cleanup_repo "$repo"
+}
+
+test_cm_invoked_from_agents_subdir_cwd() {
+  local repo; repo=$(setup_repo)
+  cp -r "$AGENTS_DIR" "$repo/.agents"
+  HOOK_RUN_CWD="$repo/.agents" SECURITY_GATE_TEST_CMD=true MOCK_CM_REPORT_MODE=high \
+    run_hook "$repo/.agents/security_gate_hook.sh" "$repo" \
+    '{"toolCall":{"name":"run_command","args":{"CommandLine":"git push"}}}'
+  assert_eq "cm: hook invoked with PWD=<repo>/.agents auto-fixes and allows" "allow" "$(decision "$repo")"
+  assert_contains "cm: hook invoked from .agents logs to <repo>/.security-gate" "$(log_events "$repo")" "FIXED"
   cleanup_repo "$repo"
 }
 
@@ -241,14 +301,19 @@ for t in \
   test_cm_pass_no_findings \
   test_cm_stdin_non_push_command_allows_without_scanning \
   test_cm_stdin_push_command_triggers_scan \
+  test_cm_stdin_git_flag_push_and_malformed_json \
   test_cm_error_blocks_by_default \
   test_cm_error_allow_on_error_true \
   test_cm_advisory_low_severity_does_not_block \
   test_cm_blocking_high_severity_autofix_commits \
   test_cm_legacy_pascal_schema_autofix_commits \
+  test_cm_other_vuln_suffix_does_not_false_match \
+  test_cm_windows_backslash_path_normalizes_and_commits \
+  test_cm_rescan_reopened_status_blocks_and_reverts \
   test_cm_blocking_retries_exhausted_no_tty_fails_closed \
   test_cm_large_fix_diff_escalates_not_autocommitted \
   test_cm_mixed_severity_fixes_blocking_logs_advisory \
+  test_cm_invoked_from_agents_subdir_cwd \
   test_semgrep_pass_no_findings \
   test_semgrep_error_blocks_by_default \
   test_semgrep_error_allow_on_error_true \

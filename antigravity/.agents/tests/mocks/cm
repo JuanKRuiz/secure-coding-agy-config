@@ -12,25 +12,31 @@ case "$1" in
       echo "cm: authentication failed - run 'gcloud auth application-default login'" >&2
       exit 1
     fi
-    # Once a fix has been "applied" (mock cm fix touches STATE_FILE), report clean.
+    REPORT_FILE="${MOCK_REPORT_FILE:-${MOCK_FILE:-vuln.py}}"
+    # Once a fix has been "applied" (mock cm fix touches STATE_FILE), report clean
+    # unless MOCK_CM_RESCAN_REOPENED=true simulates a fix that failed rescan.
     if [ -f "$STATE_FILE" ]; then
-      echo '[]'
+      if [ "${MOCK_CM_RESCAN_REOPENED:-false}" = "true" ]; then
+        echo "[{\"finding_id\":\"F1\",\"file_path\":\"${REPORT_FILE}\",\"severity\":\"HIGH\",\"status\":\"REOPENED\"}]"
+      else
+        echo '[]'
+      fi
       exit 0
     fi
     if [ "${MOCK_CM_SCHEMA:-snake}" = "pascal" ]; then
       case "${MOCK_CM_REPORT_MODE:-clean}" in
         clean) echo '[]' ;;
-        high)  echo "[{\"FindingID\":\"F1\",\"FilePath\":\"${MOCK_FILE:-vuln.py}\",\"Severity\":\"HIGH\"}]" ;;
-        low)   echo "[{\"FindingID\":\"F1\",\"FilePath\":\"${MOCK_FILE:-vuln.py}\",\"Severity\":\"LOW\"}]" ;;
-        mixed) echo "[{\"FindingID\":\"F1\",\"FilePath\":\"${MOCK_FILE:-vuln.py}\",\"Severity\":\"HIGH\"},{\"FindingID\":\"F2\",\"FilePath\":\"${MOCK_FILE:-vuln.py}\",\"Severity\":\"LOW\"}]" ;;
+        high)  echo "[{\"FindingID\":\"F1\",\"FilePath\":\"${REPORT_FILE}\",\"Severity\":\"HIGH\"}]" ;;
+        low)   echo "[{\"FindingID\":\"F1\",\"FilePath\":\"${REPORT_FILE}\",\"Severity\":\"LOW\"}]" ;;
+        mixed) echo "[{\"FindingID\":\"F1\",\"FilePath\":\"${REPORT_FILE}\",\"Severity\":\"HIGH\"},{\"FindingID\":\"F2\",\"FilePath\":\"${REPORT_FILE}\",\"Severity\":\"LOW\"}]" ;;
         *) echo '[]' ;;
       esac
     else
       case "${MOCK_CM_REPORT_MODE:-clean}" in
         clean) echo '[]' ;;
-        high)  echo "[{\"finding_id\":\"F1\",\"file_path\":\"${MOCK_FILE:-vuln.py}\",\"severity\":\"HIGH\",\"status\":\"OPEN\"}]" ;;
-        low)   echo "[{\"finding_id\":\"F1\",\"file_path\":\"${MOCK_FILE:-vuln.py}\",\"severity\":\"LOW\",\"status\":\"OPEN\"}]" ;;
-        mixed) echo "[{\"finding_id\":\"F1\",\"file_path\":\"${MOCK_FILE:-vuln.py}\",\"severity\":\"HIGH\",\"status\":\"OPEN\"},{\"finding_id\":\"F2\",\"file_path\":\"${MOCK_FILE:-vuln.py}\",\"severity\":\"LOW\",\"status\":\"OPEN\"}]" ;;
+        high)  echo "[{\"finding_id\":\"F1\",\"file_path\":\"${REPORT_FILE}\",\"severity\":\"HIGH\",\"status\":\"OPEN\"}]" ;;
+        low)   echo "[{\"finding_id\":\"F1\",\"file_path\":\"${REPORT_FILE}\",\"severity\":\"LOW\",\"status\":\"OPEN\"}]" ;;
+        mixed) echo "[{\"finding_id\":\"F1\",\"file_path\":\"${REPORT_FILE}\",\"severity\":\"HIGH\",\"status\":\"OPEN\"},{\"finding_id\":\"F2\",\"file_path\":\"${REPORT_FILE}\",\"severity\":\"LOW\",\"status\":\"OPEN\"}]" ;;
         *) echo '[]' ;;
       esac
     fi

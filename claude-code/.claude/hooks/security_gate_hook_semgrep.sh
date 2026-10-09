@@ -29,12 +29,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/gate_common.sh"
 
 INPUT=$(cat)
-COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
+COMMAND=$(printf '%s\n' "$INPUT" | jq -r '.tool_input?.command? // empty' 2>/dev/null || true)
 
-case "$COMMAND" in
-  *"git push"*) ;;
-  *) allow ;;
-esac
+if ! is_git_push_command "$COMMAND"; then
+  allow
+fi
 
 cd "$(_gate_repo_root)" || exit 1
 
@@ -83,13 +82,13 @@ BLOCKING_JSON=$(echo "$SEMGREP_OUTPUT" | jq -c '.results[]' | while IFS= read -r
   SEV=$(echo "$r" | jq -r '.extra.severity // "UNKNOWN"')
   RANK=$(severity_rank "$SEV")
   THRESH=$(severity_rank "$SECURITY_GATE_BLOCK_SEVERITY")
-  [ "$RANK" -ge "$THRESH" ] && echo "$r"
+  if [ "$RANK" -ge "$THRESH" ]; then echo "$r"; fi
 done | jq -s '.')
 ADVISORY_JSON=$(echo "$SEMGREP_OUTPUT" | jq -c '.results[]' | while IFS= read -r r; do
   SEV=$(echo "$r" | jq -r '.extra.severity // "UNKNOWN"')
   RANK=$(severity_rank "$SEV")
   THRESH=$(severity_rank "$SECURITY_GATE_BLOCK_SEVERITY")
-  [ "$RANK" -lt "$THRESH" ] && echo "$r"
+  if [ "$RANK" -lt "$THRESH" ]; then echo "$r"; fi
 done | jq -s '.')
 
 ADV_COUNT=$(echo "$ADVISORY_JSON" | jq 'length')

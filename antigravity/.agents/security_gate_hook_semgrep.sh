@@ -74,13 +74,17 @@ BLOCKING_JSON=$(echo "$SEMGREP_OUTPUT" | jq -c '.results[]' | while IFS= read -r
   SEV=$(echo "$r" | jq -r '.extra.severity // "UNKNOWN"')
   RANK=$(severity_rank "$SEV")
   THRESH=$(severity_rank "$SECURITY_GATE_BLOCK_SEVERITY")
-  [ "$RANK" -ge "$THRESH" ] && echo "$r"
+  if [ "$RANK" -ge "$THRESH" ]; then
+    echo "$r"
+  fi
 done | jq -s '.')
 ADVISORY_JSON=$(echo "$SEMGREP_OUTPUT" | jq -c '.results[]' | while IFS= read -r r; do
   SEV=$(echo "$r" | jq -r '.extra.severity // "UNKNOWN"')
   RANK=$(severity_rank "$SEV")
   THRESH=$(severity_rank "$SECURITY_GATE_BLOCK_SEVERITY")
-  [ "$RANK" -lt "$THRESH" ] && echo "$r"
+  if [ "$RANK" -lt "$THRESH" ]; then
+    echo "$r"
+  fi
 done | jq -s '.')
 
 ADV_COUNT=$(echo "$ADVISORY_JSON" | jq 'length')

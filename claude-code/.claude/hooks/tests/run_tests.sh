@@ -47,13 +47,14 @@ run_hook() {
   local script="$1" repo="$2"
   local state_dir
   state_dir=$(mktemp -d)
+  local payload="${HOOK_STDIN_JSON:-{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"git push origin main\"}}}"
   (
     cd "$repo" || exit 1
     PATH="$MOCK_BIN:$PATH" \
     MOCK_STATE_DIR="$state_dir" \
-    MOCK_FILE="vuln.py" \
+    MOCK_FILE="${MOCK_FILE:-vuln.py}" \
     SECURITY_GATE_STATE_DB="$repo/.codemender-test/state.db" \
-    bash "$script" <<< '{"tool_name":"Bash","tool_input":{"command":"git push origin main"}}' \
+    bash "$script" <<< "$payload" \
       > "$repo/.hook_stdout" 2> "$repo/.hook_stderr"
     echo $? > "$repo/.hook_exit"
   )
@@ -188,6 +189,56 @@ test_cm_mixed_severity_fixes_blocking_logs_advisory() {
   cleanup_repo "$repo"
 }
 
+test_cm_git_global_flags_and_malformed_input() {
+  local repo; repo=$(setup_repo)
+  HOOK_STDIN_JSON='{"tool_name":"Bash","tool_input":{"command":"git -C /repo push origin main"}}' \
+  SECURITY_GATE_TEST_CMD=false MOCK_CM_REPORT_MODE=high \
+    run_hook "$HOOKS_DIR/security_gate_hook.sh" "$repo"
+  assert_eq "cm: git -C /repo push triggers gate and denies on unfixable finding" "deny" "$(decision "$repo")"
+
+  HOOK_STDIN_JSON='{"tool_input":"x"}' \
+  MOCK_CM_REPORT_MODE=high \
+    run_hook "$HOOKS_DIR/security_gate_hook.sh" "$repo"
+  assert_eq "cm: malformed non-object tool_input allows cleanly without set -e crash" "allow" "$(decision "$repo")"
+  cleanup_repo "$repo"
+}
+
+test_cm_path_boundary_ignores_other_vuln_py() {
+  local repo; repo=$(setup_repo)
+  MOCK_REPORT_FILE="other_vuln.py" MOCK_CM_REPORT_MODE=high \
+    run_hook "$HOOKS_DIR/security_gate_hook.sh" "$repo"
+  assert_eq "cm: finding in other_vuln.py does not falsely match modified vuln.py" "allow" "$(decision "$repo")"
+  cleanup_repo "$repo"
+}
+
+test_cm_windows_backslash_path_normalizes_and_commits() {
+  local repo; repo=$(setup_repo)
+  (
+    cd "$repo" || exit 1
+    mkdir -p sub
+    echo "# nested vulnerable file" > sub/vuln.py
+    git add sub/vuln.py
+    git commit -q -m "add sub/vuln.py"
+  )
+  MOCK_FILE="sub/vuln.py" MOCK_REPORT_FILE='sub\\vuln.py' \
+  SECURITY_GATE_TEST_CMD=true MOCK_CM_REPORT_MODE=high \
+    run_hook "$HOOKS_DIR/security_gate_hook.sh" "$repo"
+  assert_eq "cm: Windows backslash path sub\\vuln.py normalizes and allows after fix" "allow" "$(decision "$repo")"
+  local last_msg
+  last_msg=$(cd "$repo" && git log -1 --pretty=%B)
+  assert_contains "cm: Windows backslash path committed cleanly" "$last_msg" "sub/vuln.py"
+  cleanup_repo "$repo"
+}
+
+test_cm_reopened_status_on_rescan_blocks_push() {
+  local repo; repo=$(setup_repo)
+  SECURITY_GATE_TEST_CMD=true MOCK_CM_REPORT_MODE=high MOCK_CM_FIX_REOPENED=true \
+    run_hook "$HOOKS_DIR/security_gate_hook.sh" "$repo"
+  assert_eq "cm: REOPENED status after rescan is not treated as closed and denies push" "deny" "$(decision "$repo")"
+  assert_contains "cm: REOPENED finding logged as BLOCKED" "$(log_events "$repo")" "BLOCKED"
+  cleanup_repo "$repo"
+}
+
 test_semgrep_pass_no_findings() {
   local repo; repo=$(setup_repo)
   MOCK_SEMGREP_MODE=clean run_hook "$HOOKS_DIR/security_gate_hook_semgrep.sh" "$repo"
@@ -239,6 +290,10 @@ for t in \
   test_cm_blocking_retries_exhausted_no_tty_fails_closed \
   test_cm_large_fix_diff_escalates_not_autocommitted \
   test_cm_mixed_severity_fixes_blocking_logs_advisory \
+  test_cm_git_global_flags_and_malformed_input \
+  test_cm_path_boundary_ignores_other_vuln_py \
+  test_cm_windows_backslash_path_normalizes_and_commits \
+  test_cm_reopened_status_on_rescan_blocks_push \
   test_semgrep_pass_no_findings \
   test_semgrep_error_blocks_by_default \
   test_semgrep_error_allow_on_error_true \

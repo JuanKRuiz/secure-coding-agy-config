@@ -53,11 +53,14 @@ read_lines_into_array MODIFIED_FILES_ARR "$MODIFIED_FILES"
 # source for the decision below, is treated as authoritative for ERROR.
 echo "Running CodeMender scan on changed files..." >&2
 for file in "${MODIFIED_FILES_ARR[@]}"; do
+  if [ -z "$file" ] || [ ! -f "$file" ]; then
+    continue
+  fi
   cm find "$file" -y --bypass-warning >/dev/null 2>&1 || true
 done
 
 REPORT_ERR_FILE=$(mktemp)
-if REPORT_RAW=$(cm report --status OPEN --format json --bypass-warning 2>"$REPORT_ERR_FILE"); then
+if REPORT_RAW=$(cm report --format json --bypass-warning 2>"$REPORT_ERR_FILE"); then
   REPORT_EXIT=0
 else
   REPORT_EXIT=$?
@@ -69,12 +72,22 @@ if [ $REPORT_EXIT -ne 0 ] || ! echo "$REPORT_RAW" | jq -e . >/dev/null 2>&1; the
 fi
 rm -f "$REPORT_ERR_FILE"
 
-# Filter findings to the modified files. Supports both real `cm report`
-# snake_case (`file_path`) and legacy mock PascalCase (`FilePath`),
-# normalizes backslashes, and binds each candidate explicitly (`$mf`).
+# Filter active findings (every status except FIXED and DISMISSED, so
+# OPEN, REOPENED, and VERIFIED findings are included) to the modified
+# files. Supports both real `cm report` snake_case (`file_path`) and
+# legacy mock PascalCase (`FilePath`), normalizes backslashes, enforces
+# path-segment boundary matching, and rewrites `.file_path` to the
+# matched repo-relative path for downstream git commands.
 SCAN_RESULT=$(echo "$REPORT_RAW" | jq --arg files "$MODIFIED_FILES" '
   ($files | split("\n")) as $mod_files |
-  [ .[] | select((((.file_path // .FilePath // "") | gsub("\\\\"; "/")) as $fp | $fp != "" and any($mod_files[]; . as $mf | $mf != "" and ($fp | endswith($mf))))) ]
+  [ .[]
+    | ((.status // .Status // "OPEN") | ascii_upcase) as $st
+    | select($st != "FIXED" and $st != "DISMISSED")
+    | ((.file_path // .FilePath // "") | gsub("\\\\"; "/") | ltrimstr("./")) as $fp
+    | [ $mod_files[] | gsub("\\\\"; "/") | ltrimstr("./") | select(. != "" and ($fp == . or ($fp | endswith("/" + .)))) ] as $matches
+    | select(($matches | length) > 0)
+    | .file_path = $matches[0]
+  ]
 ' 2>/dev/null || echo '[]')
 FINDINGS_COUNT=$(echo "$SCAN_RESULT" | jq 'length' 2>/dev/null || echo 0)
 
@@ -118,7 +131,7 @@ echo "Detected $BLOCK_COUNT blocking-severity vulnerabilit(y/ies). Attempting au
 # 4. Remediate & test loop (RED-GREEN) for blocking-severity findings only.
 while IFS= read -r finding <&3; do
   FINDING_ID=$(echo "$finding" | jq -r '.finding_id // .FindingID // empty')
-  FILE=$(echo "$finding" | jq -r '.file_path // .FilePath // empty')
+  FILE=$(echo "$finding" | jq -r '(.file_path // .FilePath // empty) | gsub("\\\\"; "/")')
   SEV=$(echo "$finding" | jq -r '.severity // .Severity // "UNKNOWN"')
 
   echo "Vulnerability detected: $FINDING_ID ($SEV) in $FILE" >&2
@@ -148,10 +161,11 @@ while IFS= read -r finding <&3; do
     fi
 
     # Tests passing is not proof the finding is gone - re-scan (cheap;
-    # NOT `cm verify`) before trusting it.
+    # NOT `cm verify`) before trusting it. Include REOPENED/VERIFIED
+    # findings (anything not FIXED or DISMISSED).
     cm find "$FILE" -y --bypass-warning >/dev/null 2>&1 || true
-    STILL_OPEN=$(cm report --status OPEN --format json --bypass-warning 2>/dev/null \
-      | jq --arg id "$FINDING_ID" '[.[] | select((.finding_id // .FindingID) == $id)] | length' 2>/dev/null || echo 1)
+    STILL_OPEN=$(cm report --format json --bypass-warning 2>/dev/null \
+      | jq --arg id "$FINDING_ID" '[.[] | select((((.status // .Status // "OPEN") | ascii_upcase) as $st | $st != "FIXED" and $st != "DISMISSED") and ((.finding_id // .FindingID) == $id))] | length' 2>/dev/null || echo 1)
     if [ "$STILL_OPEN" != "0" ]; then
       echo "Tests passed, but $FINDING_ID is still reported open after rescan - not trusting this fix." >&2
       revert_target_file "$FILE"
@@ -161,12 +175,17 @@ while IFS= read -r finding <&3; do
 
     # Don't blindly auto-commit an oversized generated patch - escalate
     # for human review instead (this is where `cm verify` may get used).
-    DIFF_STAT=$(git diff --shortstat -- "$FILE")
+    if [ -n "$FILE" ]; then
+      DIFF_STAT=$(git diff --shortstat -- "$FILE")
+    else
+      DIFF_STAT=$(git diff --shortstat)
+    fi
     INS=$(echo "$DIFF_STAT" | grep -oE '[0-9]+ insertion' | grep -oE '[0-9]+' || echo 0)
     DEL=$(echo "$DIFF_STAT" | grep -oE '[0-9]+ deletion' | grep -oE '[0-9]+' || echo 0)
     CHANGED_LINES=$((INS + DEL))
     if [ "$CHANGED_LINES" -gt "$SECURITY_GATE_LARGE_FIX_LINES" ]; then
       echo "Fix diff is large ($CHANGED_LINES lines > $SECURITY_GATE_LARGE_FIX_LINES) - escalating for human review instead of auto-committing." >&2
+      revert_target_file "$FILE"
       LARGE_DIFF=true
       break
     fi
@@ -211,12 +230,20 @@ while IFS= read -r finding <&3; do
       2)
         echo "Running cm verify - this can take a while..." >&2
         if cm verify "$FINDING_ID" -y --bypass-warning >&2; then
-          revert_target_file "$FILE"
-          log_event "BLOCKED" "codemender" "$(jq -n --argjson f "$finding" '{findings:[$f], reason:"confirmed exploitable via cm verify"}')"
-          notify "BLOCKED - HELP NEEDED" "Finding $FINDING_ID confirmed exploitable by cm verify and could not be auto-fixed. Push blocked - needs help from another team." \
-            "$(jq -n --argjson f "$finding" '{findings:[$f]}')"
-          rm -rf "$WORK_DIR"
-          deny "Exploitable vulnerability $FINDING_ID confirmed by 'cm verify' and could not be auto-fixed. See $SECURITY_GATE_LOG - loop in security/another team for help before pushing."
+          VERIFY_STATUS=$(cm report --format json --bypass-warning 2>/dev/null \
+            | jq -r --arg id "$FINDING_ID" '[.[] | select((.finding_id // .FindingID) == $id) | (.status // .Status // "VERIFIED") | ascii_upcase] | first // "VERIFIED"' 2>/dev/null || echo "VERIFIED")
+          if [ "$VERIFY_STATUS" = "DISMISSED" ]; then
+            echo "cm verify dismissed this finding as non-exploitable - treating as advisory and proceeding." >&2
+            revert_target_file "$FILE"
+            log_event "ADVISORY" "codemender" "$(jq -n --argjson f "$finding" '{findings:[$f], reason:"cm verify found non-exploitable"}')"
+          else
+            revert_target_file "$FILE"
+            log_event "BLOCKED" "codemender" "$(jq -n --argjson f "$finding" '{findings:[$f], reason:"confirmed exploitable via cm verify"}')"
+            notify "BLOCKED - HELP NEEDED" "Finding $FINDING_ID confirmed exploitable by cm verify and could not be auto-fixed. Push blocked - needs help from another team." \
+              "$(jq -n --argjson f "$finding" '{findings:[$f]}')"
+            rm -rf "$WORK_DIR"
+            deny "Exploitable vulnerability $FINDING_ID confirmed by 'cm verify' and could not be auto-fixed. See $SECURITY_GATE_LOG - loop in security/another team for help before pushing."
+          fi
         else
           echo "cm verify found this non-exploitable - treating as advisory and proceeding." >&2
           revert_target_file "$FILE"
