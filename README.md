@@ -439,6 +439,8 @@ All of the following are optional environment variables (unset = the default sho
 | `SECURITY_GATE_LOG` | `<repo root>/.security-gate/findings-log.ndjson` | Append-only local audit trail (one JSON object per line: timestamp, outcome, actor, commit, findings). Best-effort telemetry, not a tamper-evident record - see `threat_model.md` T5. |
 | `SECURITY_GATE_STATE_DB` | `~/.codemender/state.db` | Where the CodeMender script writes suppression/dismiss records. |
 
+**What the CodeMender gate commits.** When `cm fix` closes a blocking finding, the gate commits only the files `cm fix` changed. Pre-existing untracked files, staged work, other uncommitted edits and the artifacts your test command writes are never swept into that commit. Besides the `SECURITY_GATE_LARGE_FIX_LINES` limit, the gate always escalates instead of committing when the fix touches a binary file or a file that already had uncommitted edits (including a pre-existing untracked file): it reverts the fix and tells you to commit or stash those edits first. An untracked file that another process writes while `cm fix` runs (an editor or dev-server log, for example) is treated as a dirty fix file, so the result is a safe escalation, never a commit.
+
 #### Testing the gate scripts offline
 
 Each agent's hook directory ships a small, dependency-free test suite that mocks `cm`/`semgrep` (see `tests/mocks/`) and drives the real scripts against a throwaway git repo, so the PASS/ADVISORY/ERROR/BLOCKED/FIXED branching can be verified without real CodeMender or Semgrep access:
