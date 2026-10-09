@@ -28,7 +28,9 @@ This skill is based on classic TDD methodologies (such as Kent Beck's *Test-Driv
    - Re-run the tests after every change to ensure no regressions are introduced.
 5. **PUSH**:
    - Once all tests are green and the refactoring is complete, summarize the change and the test results, and ask the user for explicit confirmation before running `git push`. Never push autonomously: a push publishes code to a shared remote, which is a state-changing action that requires human approval (see the human-in-the-loop guidance in the **secure-coding skill**).
+   - When asking for confirmation, tell the user that the pre-push security gate may add an automated fix commit (`security: automated fix ...`) to this push if it auto-fixes a blocking finding.
    - After the user approves, run `git push` to trigger the pre-push security verification hook. If the hook blocks the push, return to RED with the reported findings.
+   - After the push, report the gate outcome to the user (PASS, ADVISORY, or FIXED). If it was FIXED, show the commit the gate added with `git log -1 --stat` (one commit per fixed finding; widen `-1` if it fixed several).
 
 ## The Prove-It Pattern (Security Remediations)
 When addressing a security vulnerability:
@@ -40,4 +42,4 @@ When addressing a security vulnerability:
 4. **GREEN Step**: 
    - Apply the security patch (manually or via `cm fix`). Ensure the implementation adheres to the **Secure Coding Guidelines Skill**.
    - Verify that the exploit test now fails to compromise the system and all other tests pass (green).
-5. **PUSH Step**: Summarize the fix and the exploit test result, and ask the user for explicit confirmation before running `git push`; never push autonomously. After the user approves, run `git push` to trigger the pre-push security verification hook. If the hook blocks the push, return to the RED step with the reported findings.
+5. **PUSH Step**: Summarize the fix and the exploit test result, and ask the user for explicit confirmation before running `git push`, telling them the pre-push security gate may add an automated fix commit to the push; never push autonomously. After the user approves, run `git push` to trigger the pre-push security verification hook. If the hook blocks the push, return to the RED step with the reported findings. After the push, report the gate outcome and, if it was FIXED, show the added commit with `git log -1 --stat`.
