@@ -17,54 +17,56 @@ Two phases, connected by `git push`: an agent-side workflow driven by the three 
 
 ```mermaid
 flowchart TD
-    Start(["Security-critical task or bug"]) --> Plan["PLAN — test-driven-development skill<br/>design, requirements, test strategy"]
-    Plan --> TM{"Untrusted input or<br/>trust boundary involved?"}
-    TM -->|yes| ThreatModel["threat-modeling skill<br/>entry points, trust boundaries,<br/>threat matrix &rarr; threat_model.md"]
-    TM -->|no| Red
-    ThreatModel --> Red["RED — write failing tests,<br/>incl. security edge cases from threat_model.md"]
-    Red --> RedCheck{"Tests fail for the<br/>expected reason?"}
-    RedCheck -->|"no (syntax/import error)"| Red
-    RedCheck -->|yes| Green["GREEN — minimal implementation,<br/>secure-coding skill: input validation,<br/>parameterized queries, path canonicalization"]
-    Green --> GreenCheck{"Tests pass?"}
-    GreenCheck -->|no| Green
-    GreenCheck -->|yes| Refactor["REFACTOR — clean up,<br/>re-run full test suite"]
-    Refactor --> Push["git push"]
-    Push --> ToolCheck{"cm / semgrep<br/>on PATH?"}
-
-    subgraph Hook ["Security Gate Hook (PreToolUse on git push)"]
-        direction TB
-        ToolCheck -->|missing| ErrorOut
-        ToolCheck -->|found| Scan["Scan modified files"]
-        Scan --> ScanOK{"Scan produced<br/>valid output?"}
-        ScanOK -->|"no: crash / auth / timeout"| ErrorOut[["ERROR<br/>logged + notified loudly<br/>blocks by default"]]
-        ScanOK -->|yes| Findings{"Findings in<br/>changed files?"}
-        Findings -->|none| PassOut[["PASS<br/>allow, silent"]]
-        Findings -->|some| Split{"Split by severity vs<br/>SECURITY_GATE_BLOCK_SEVERITY"}
-        Split -->|below threshold| AdvisoryOut[["ADVISORY<br/>logged + notified,<br/>push proceeds"]]
-        Split -->|"at/above threshold"| FixLoop["cm fix + run test suite"]
-        FixLoop --> FixCheck{"Tests pass?"}
-        FixCheck -->|"no, retries left"| FixLoop
-        FixCheck -->|"no, retries exhausted"| Escalate{"Escalate to human"}
-        FixCheck -->|yes| Rescan{"Rescan: finding<br/>actually closed?"}
-        Rescan -->|"still open, retries left"| FixLoop
-        Rescan -->|closed| SizeCheck{"Fix diff under<br/>SECURITY_GATE_LARGE_FIX_LINES?"}
-        SizeCheck -->|yes| Commit[["FIXED<br/>commit + log,<br/>push proceeds"]]
-        SizeCheck -->|"no, too large"| Escalate
-        Escalate -->|"1: defer + justification"| AdvisoryOut
-        Escalate -->|"2: cm verify (slow)"| VerifyCheck{"Exploitable?"}
-        Escalate -->|"3 / no answer"| BlockedOut[["BLOCKED<br/>logged, deny"]]
-        VerifyCheck -->|yes| BlockedHelp[["BLOCKED — help needed<br/>notify another team, deny"]]
-        VerifyCheck -->|no| AdvisoryOut
+    subgraph SG_Phase1 ["Phase 1 — Agent Security-Driven Workflow (Skills & Rules)"]
+        direction LR
+        Start(["<b>START</b><br/>Security Task or Bug"]):::neutral --> Plan["<b>1. PLAN</b><br/>TDD Strategy"]:::gcpBlue
+        Plan --> TM["<b>2. THREAT MODEL</b><br/>threat_model.md"]:::gcpYellow
+        TM --> Red["<b>3. RED</b><br/>Failing Security Tests"]:::gcpRed
+        wpRed_dst((("↺<br/>RED"))):::wp_red -.-> Red
+        Red --> Green["<b>4. GREEN & REFACTOR</b><br/>Secure Code + Tests Pass"]:::gcpGreen
+        Green ==> wpPush_src((("🚀<br/>Push"))):::wp_blue
     end
 
-    BlockedOut -.->|"fix required"| Red
-    BlockedHelp -.->|"fix required"| Red
-    PassOut --> Done(["Pushed"])
-    AdvisoryOut --> Done
-    Commit --> Done
+    SG_Phase1 ~~~ SG_Phase2
+
+    subgraph SG_Phase2 ["Phase 2 — Pre-Push Security Gate Hook (CodeMender / Semgrep)"]
+        direction TB
+        wpPush_dst((("🚀<br/>Push"))):::wp_blue ==> Scan["<b>Scan Modified Files</b><br/>cm find + report | semgrep scan"]:::gcpBlue
+
+        Scan -->|"crash / auth / missing CLI"| ErrorOut[["<b>ERROR</b><br/>Logged + Notified (Blocks)"]]:::gcpRed
+        Scan -->|"0 findings"| PassOut[["<b>PASS</b><br/>Silent Allow"]]:::gcpGreen
+        Scan -->|"below threshold"| AdvisoryOut[["<b>ADVISORY</b><br/>Logged + Notified"]]:::gcpYellow
+        wpAdv_dst((("⚠️<br/>Adv"))):::wp_yellow -.-> AdvisoryOut
+        Scan -->|"blocking (cm)"| FixLoop["<b>↺ Auto-Remediation Loop (cm)</b><br/>cm fix → Run Tests → Rescan"]:::gcpBlue
+        Scan -->|"blocking (semgrep)"| BlockedOut[["<b>BLOCKED</b><br/>Logged + Deny Push"]]:::gcpRed
+
+        FixLoop -->|"closed & diff ≤ 50L"| FixedOut[["<b>FIXED</b><br/>Auto-Committed + Logged"]]:::gcpGreen
+        FixLoop -->|"retries exhausted / diff > 50L"| Escalate{"<b>Human Escalation</b><br/>1: Defer<br/>2: cm verify<br/>3: Abort"}:::gcpYellow
+
+        Escalate -.->|"1: Defer / 2: Non-exploitable"| wpAdv_src((("⚠️<br/>Adv"))):::wp_yellow
+        Escalate -->|"3: Abort / 2: Exploitable (Help Needed)"| BlockedOut
+
+        ErrorOut ==> EndNode(["<b>END</b><br/>Hook Complete"]):::neutral
+        PassOut ==> EndNode
+        AdvisoryOut ==> EndNode
+        FixedOut ==> EndNode
+        BlockedOut -.-> wpRed_src((("↺<br/>RED"))):::wp_red
+    end
+
+    classDef gcpBlue fill:#E8F0FE,stroke:#1967D2,stroke-width:2px,color:#000,font-family:Roboto
+    classDef gcpGreen fill:#E6F4EA,stroke:#1E8E3E,stroke-width:2px,color:#000,font-family:Roboto
+    classDef gcpYellow fill:#FEF7E0,stroke:#B06000,stroke-width:2px,color:#000,font-family:Roboto
+    classDef gcpRed fill:#FCE8E6,stroke:#D93025,stroke-width:2px,color:#000,font-family:Roboto
+    classDef neutral fill:#F1F3F4,stroke:#5F6368,stroke-width:2px,color:#000,font-family:Roboto
+    classDef wp_blue fill:#1A73E8,stroke:#0D47A1,stroke-width:2px,color:#fff,font-weight:bold
+    classDef wp_red fill:#EA4335,stroke:#C5221F,stroke-width:2px,color:#fff,font-weight:bold
+    classDef wp_yellow fill:#F29900,stroke:#B06000,stroke-width:2px,color:#fff,font-weight:bold
+
+    style SG_Phase1 fill:#F8F9FA,stroke:#DADCE0,stroke-width:2px
+    style SG_Phase2 fill:#E8F0FE,stroke:#1967D2,stroke-width:2px
 ```
 
-Rectangles are actions, diamonds are decisions, double-bordered nodes are the five terminal outcomes from the [Outcome model table](#outcome-model-pass--advisory--error--blocked--fixed) below. Note what's *not* in this diagram: `cm verify` only ever appears on the escalation branch (choice 2), never on the path a clean auto-fix takes — see `threat_model.md` T7 for why.
+Stadium nodes (`START`, `END`) mark the workflow boundaries, rectangles are actions, diamonds are decisions, double-bordered nodes are the five terminal outcomes from the [Outcome model table](#outcome-model-pass--advisory--error--blocked--fixed) below, and concentric circles (`🚀 Push`, `↺ RED`, `⚠️ Adv`) are connector ports that decouple cross-branch edges. Note what's *not* in this diagram: `cm verify` only ever appears on the escalation branch (choice 2), never on the path a clean auto-fix takes — see `threat_model.md` T7 for why.
 
 ---
 
