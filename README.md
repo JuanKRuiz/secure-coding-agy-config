@@ -326,10 +326,10 @@ Claude Code's Bash tool asks for approval before running commands it hasn't seen
 
 ### How the hook differs from Antigravity's
 
-Claude Code hooks and Antigravity hooks are the same *concept* (a `PreToolUse` handler with a `matcher`, invoking a `command`), but two details had to change when porting `security_gate_hook.sh`:
-- **Matching `git push` specifically**: Antigravity's matcher accepted a shell glob (`"git push*"`) directly. Claude Code's `matcher` only filters by tool name (`Bash`, `Edit`, etc.); to filter by the command's *content* you add an `if: "Bash(git push*)"` field on the individual hook handler.
-- **Blocking a push**: Antigravity's script printed `{"allow_tool": false, "reason": "..."}`. Claude Code expects `{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "..."}}` on stdout (or a plain `exit 2`). The ported scripts in `.claude/hooks/` use small `allow()` / `deny()` helpers for this.
-- **Interactive prompts**: Claude Code passes the hook's JSON payload on stdin, so the script's own `read -p` prompts (used in the CodeMender RED/GREEN escalation flow) had to be redirected to `/dev/tty` to still work in an interactive terminal session. This doesn't apply to the Semgrep script, which was already non-interactive.
+Claude Code hooks and Antigravity hooks share the same *concept* (a `PreToolUse` handler with a `matcher`, invoking a `command` and passing a JSON payload on `stdin`), with a few runtime-specific differences:
+- **Matching `git push` specifically**: Both Antigravity (`matcher: "run_command|.*:run_command|run_shell_command"`) and Claude Code (`matcher: "Bash"`) match by tool name in the hook config, and both scripts inspect the `stdin` JSON payload (`.toolCall.args.CommandLine` in Antigravity, `.tool_input.command` in Claude Code) to exit early (`allow`) for any command other than `git push`. Claude Code also supports an `if: "Bash(git push*)"` filter on the handler itself.
+- **Blocking a push**: Antigravity's script emits `{"decision": "deny", "allow_tool": false, "reason": "...", "deny_reason": "..."}` (supporting both the current `PreToolHookResult` schema and legacy fields). Claude Code expects `{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "..."}}` on stdout (or a plain `exit 2`). The scripts use small `allow()` / `deny()` helpers in `lib/gate_common.sh` for this.
+- **Interactive prompts**: Because `PreToolUse` hooks run as subprocesses whose `stdout`/`stderr` pipes are captured by the agent harness, interactive prompts (`read -p`) are disabled by default (`SECURITY_GATE_INTERACTIVE=false`) so automated runs and test suites never hang on `/dev/tty` or abort under `set -e` on `EOF`. Set `SECURITY_GATE_INTERACTIVE=true` to enable interactive `/dev/tty` escalation prompts when running manually in a terminal.
 
 ---
 
@@ -351,8 +351,8 @@ Antigravity: `antigravity/.agents/rules/security_workflow.md` · Claude Code: `c
 There are two hooks configurations available for each agent:
 
 **Antigravity** (`antigravity/.agents/`):
-- **CodeMender Hook** (`hooks.json`): Intercepts `git push` to run the CodeMender-based security gate script.
-- **Semgrep Hook** (`hooks_semgrep.json`): (Alternate) Use this if you do not have access to CodeMender. Intercepts `git push` to run the Semgrep-based security gate script. Rename this file to `hooks.json` to activate it.
+- **CodeMender Hook** (`hooks.json`): Intercepts `git push` tool executions to run the CodeMender-based security gate script.
+- **Semgrep Hook** (`hooks_semgrep.json`): (Alternate) Use this if you do not have access to CodeMender. Intercepts `git push` tool executions to run the Semgrep-based security gate script. Rename this file to `hooks.json` to activate it.
 
 Example `hooks_semgrep.json` configuration:
 ```json
@@ -360,11 +360,11 @@ Example `hooks_semgrep.json` configuration:
   "semgrep-security-gate": {
     "PreToolUse": [
       {
-        "matcher": "git push*",
+        "matcher": "run_command|.*:run_command|run_shell_command",
         "hooks": [
           {
             "type": "command",
-            "command": "./.agents/security_gate_hook_semgrep.sh",
+            "command": "./security_gate_hook_semgrep.sh",
             "timeout": 120
           }
         ]
@@ -407,7 +407,7 @@ Example `settings.semgrep.json` configuration:
 - **Semgrep Gate Script** (`antigravity/.agents/security_gate_hook_semgrep.sh` / `claude-code/.claude/hooks/security_gate_hook_semgrep.sh`): Runs Semgrep scan locally using its open-source config rules (`semgrep scan --config auto --json`). If blocking-severity findings are detected, the script blocks the push and returns the exact list of issues to the agent, which then uses the TDD and Secure Coding skills to write, test, and apply the fixes directly.
 - **Shared helpers** (`.../lib/gate_common.sh`): severity ranking, the audit-log/notify helpers, and `handle_scan_error` (see below). Sourced by both gate scripts in each agent's directory; not meant to be run directly.
 
-The two versions of each script are functionally identical; the Claude Code versions differ only in the stdin/stdout contract described above (reading `tool_input.command` from JSON, and emitting `hookSpecificOutput.permissionDecision` instead of `{"allow_tool": ...}`).
+The two versions of each script are functionally identical; the Claude Code versions differ only in the stdin/stdout envelope described above.
 
 #### Outcome model: PASS / ADVISORY / ERROR / BLOCKED / FIXED
 
@@ -434,6 +434,7 @@ All of the following are optional environment variables (unset = the default sho
 | `SECURITY_GATE_LARGE_FIX_LINES` | `50` | A `cm fix` diff larger than this (insertions + deletions) escalates for human review instead of being auto-committed. |
 | `SECURITY_GATE_MAX_RETRIES` | `1` | How many times the CodeMender script retries `cm fix` + tests before escalating. |
 | `SECURITY_GATE_TEST_CMD` | `python3 -m unittest discover -s tests` | The command run for the GREEN step. Override for non-Python test suites. |
+| `SECURITY_GATE_INTERACTIVE` | `false` | If `true`, enables interactive `read -p` prompts on `/dev/tty` during the RED confirmation and escalation menu. Disabled by default so automated agent runs and test suites never hang on `/dev/tty`. |
 | `SECURITY_GATE_NOTIFY_CMD` | *(unset)* | If set, invoked with a JSON event on stdin for ADVISORY/ERROR/BLOCKED outcomes - e.g. a small wrapper script that posts to Slack or files a ticket, so another team is actually looped in instead of relying on someone reading terminal output. |
 | `SECURITY_GATE_LOG` | `<repo root>/.security-gate/findings-log.ndjson` | Append-only local audit trail (one JSON object per line: timestamp, outcome, actor, commit, findings). Best-effort telemetry, not a tamper-evident record - see `threat_model.md` T5. |
 | `SECURITY_GATE_STATE_DB` | `~/.codemender/state.db` | Where the CodeMender script writes suppression/dismiss records. |
@@ -450,7 +451,7 @@ bash antigravity/.agents/tests/run_tests.sh
 bash claude-code/.claude/hooks/tests/run_tests.sh
 ```
 
-Both require `jq` and `git` on `PATH` (the same runtime dependencies the hooks themselves have) and currently pass 26/26. What they don't cover: the interactive escalation menu's actual choice-handling beyond "no/blank input fails closed" (feeding a real terminal session goes beyond what a scripted test can drive), and both scripts still assume CodeMender's real `cm report` output uses a `Severity` field - this is called out as a `VERIFY:`-style assumption in the code and threat model, since it's only checkable against a live `cm` account.
+Both require `jq` and `git` on `PATH` (the same runtime dependencies the hooks themselves have) and support both the verified `cm report --format json` `snake_case` schema (`finding_id`, `file_path`, `severity`) and legacy `PascalCase` fields (`FindingID`, `FilePath`, `Severity`).
 
 ---
 

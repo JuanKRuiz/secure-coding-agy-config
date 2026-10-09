@@ -27,6 +27,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/gate_common.sh
 source "$SCRIPT_DIR/lib/gate_common.sh"
 
+check_git_push_stdin
+cd "$(_gate_repo_root)" || exit 1
+
+revert_target_file() {
+  if [ -n "${1:-}" ]; then
+    git checkout -- "$1" >&2 2>&1 || true
+  else
+    git checkout -- . >&2 2>&1 || true
+  fi
+}
+
 command -v cm >/dev/null 2>&1 || handle_scan_error "codemender" "the 'cm' CLI is not on PATH"
 
 # 1. Discover modified files (compare against remote tracking or previous commit)
@@ -46,7 +57,7 @@ for file in "${MODIFIED_FILES_ARR[@]}"; do
 done
 
 REPORT_ERR_FILE=$(mktemp)
-if REPORT_RAW=$(cm report --status OPEN --format json 2>"$REPORT_ERR_FILE"); then
+if REPORT_RAW=$(cm report --status OPEN --format json --bypass-warning 2>"$REPORT_ERR_FILE"); then
   REPORT_EXIT=0
 else
   REPORT_EXIT=$?
@@ -58,13 +69,12 @@ if [ $REPORT_EXIT -ne 0 ] || ! echo "$REPORT_RAW" | jq -e . >/dev/null 2>&1; the
 fi
 rm -f "$REPORT_ERR_FILE"
 
-# Filter findings to the modified files. Normalizes backslashes so
-# CodeMender's Windows-style paths compare correctly against git's
-# forward-slash paths, and binds each candidate explicitly (`$mf`) rather
-# than piping into endswith(.), which silently compared a path to itself.
+# Filter findings to the modified files. Supports both real `cm report`
+# snake_case (`file_path`) and legacy mock PascalCase (`FilePath`),
+# normalizes backslashes, and binds each candidate explicitly (`$mf`).
 SCAN_RESULT=$(echo "$REPORT_RAW" | jq --arg files "$MODIFIED_FILES" '
   ($files | split("\n")) as $mod_files |
-  [ .[] | select((.FilePath | gsub("\\\\"; "/")) as $fp | any($mod_files[]; . as $mf | $mf != "" and ($fp | endswith($mf)))) ]
+  [ .[] | select((((.file_path // .FilePath // "") | gsub("\\\\"; "/")) as $fp | $fp != "" and any($mod_files[]; . as $mf | $mf != "" and ($fp | endswith($mf))))) ]
 ' 2>/dev/null || echo '[]')
 FINDINGS_COUNT=$(echo "$SCAN_RESULT" | jq 'length' 2>/dev/null || echo 0)
 
@@ -81,7 +91,7 @@ echo "$SCAN_RESULT" | jq -c '.[]' > "$WORK_DIR/all.jsonl"
 : > "$WORK_DIR/advisory.jsonl"
 while IFS= read -r finding; do
   [ -z "$finding" ] && continue
-  SEV=$(echo "$finding" | jq -r '.Severity // .severity // "UNKNOWN"')
+  SEV=$(echo "$finding" | jq -r '.severity // .Severity // "UNKNOWN"')
   if is_blocking_severity "$SEV"; then
     echo "$finding" >> "$WORK_DIR/blocking.jsonl"
   else
@@ -107,13 +117,13 @@ echo "Detected $BLOCK_COUNT blocking-severity vulnerabilit(y/ies). Attempting au
 
 # 4. Remediate & test loop (RED-GREEN) for blocking-severity findings only.
 while IFS= read -r finding <&3; do
-  FINDING_ID=$(echo "$finding" | jq -r '.FindingID')
-  FILE=$(echo "$finding" | jq -r '.FilePath')
-  SEV=$(echo "$finding" | jq -r '.Severity // .severity // "UNKNOWN"')
+  FINDING_ID=$(echo "$finding" | jq -r '.finding_id // .FindingID // empty')
+  FILE=$(echo "$finding" | jq -r '.file_path // .FilePath // empty')
+  SEV=$(echo "$finding" | jq -r '.severity // .Severity // "UNKNOWN"')
 
   echo "Vulnerability detected: $FINDING_ID ($SEV) in $FILE" >&2
   echo "Before applying the fix, you must write a reproducing test that fails (RED)." >&2
-  read -p "Add the test and press Enter once it is verified failing..."
+  prompt_user _RED_ACK "Add the test and press Enter once it is verified failing..."
 
   RETRY_COUNT=0
   RESOLVED=false
@@ -121,18 +131,18 @@ while IFS= read -r finding <&3; do
 
   while [ $RETRY_COUNT -le "$SECURITY_GATE_MAX_RETRIES" ]; do
     echo "Attempting cm fix for: $FINDING_ID (Attempt: $((RETRY_COUNT+1)))" >&2
-    if ! cm fix "$FINDING_ID" -y --bypass-warning; then
+    if ! cm fix "$FINDING_ID" -y --bypass-warning >&2; then
       echo "cm fix itself failed. Reverting and retrying." >&2
-      git checkout -- .
+      revert_target_file "$FILE"
       RETRY_COUNT=$((RETRY_COUNT+1))
       continue
     fi
 
     # GREEN step: run the test suite (configurable; default assumes a
     # Python unittest layout - override SECURITY_GATE_TEST_CMD otherwise).
-    if ! sh -c "$SECURITY_GATE_TEST_CMD"; then
+    if ! sh -c "$SECURITY_GATE_TEST_CMD" >&2; then
       echo "Fix broke the tests. Reverting changes..." >&2
-      git checkout -- .
+      revert_target_file "$FILE"
       RETRY_COUNT=$((RETRY_COUNT+1))
       continue
     fi
@@ -140,18 +150,18 @@ while IFS= read -r finding <&3; do
     # Tests passing is not proof the finding is gone - re-scan (cheap;
     # NOT `cm verify`) before trusting it.
     cm find "$FILE" -y --bypass-warning >/dev/null 2>&1 || true
-    STILL_OPEN=$(cm report --status OPEN --format json 2>/dev/null \
-      | jq --arg id "$FINDING_ID" '[.[] | select(.FindingID == $id)] | length' 2>/dev/null || echo 1)
+    STILL_OPEN=$(cm report --status OPEN --format json --bypass-warning 2>/dev/null \
+      | jq --arg id "$FINDING_ID" '[.[] | select((.finding_id // .FindingID) == $id)] | length' 2>/dev/null || echo 1)
     if [ "$STILL_OPEN" != "0" ]; then
       echo "Tests passed, but $FINDING_ID is still reported open after rescan - not trusting this fix." >&2
-      git checkout -- .
+      revert_target_file "$FILE"
       RETRY_COUNT=$((RETRY_COUNT+1))
       continue
     fi
 
     # Don't blindly auto-commit an oversized generated patch - escalate
     # for human review instead (this is where `cm verify` may get used).
-    DIFF_STAT=$(git diff --shortstat)
+    DIFF_STAT=$(git diff --shortstat -- "$FILE")
     INS=$(echo "$DIFF_STAT" | grep -oE '[0-9]+ insertion' | grep -oE '[0-9]+' || echo 0)
     DEL=$(echo "$DIFF_STAT" | grep -oE '[0-9]+ deletion' | grep -oE '[0-9]+' || echo 0)
     CHANGED_LINES=$((INS + DEL))
@@ -161,11 +171,15 @@ while IFS= read -r finding <&3; do
       break
     fi
 
-    git add -A
+    if [ -n "$FILE" ]; then
+      git add -- "$FILE" >&2 2>&1
+    else
+      git add -u >&2 2>&1
+    fi
     if git diff --cached --quiet; then
       echo "cm fix confirmed the finding closed but left no working-tree changes to commit." >&2
     else
-      git commit -q -m "security: automated fix for $FINDING_ID ($FILE)"
+      git commit -q -m "security: automated fix for $FINDING_ID ($FILE)" >&2 2>&1
     fi
     echo "Fix successful, verified by rescan, and committed (GREEN)!" >&2
     log_event "FIXED" "codemender" "$(jq -n --argjson f "$finding" '{findings:[$f]}')"
@@ -183,20 +197,21 @@ while IFS= read -r finding <&3; do
     echo "1) Defer/mute with justification (logged + notified; push proceeds)" >&2
     echo "2) Check exploitability via 'cm verify' (slow - only use this if you need the answer to decide)" >&2
     echo "3) Abort and fix manually (blocks push)" >&2
-    read -p "Enter choice [1-3]: " CHOICE
+    prompt_user CHOICE "Enter choice [1-3]: "
 
     case "$CHOICE" in
       1)
-        read -p "Enter deferral justification: " JUSTIFICATION
-        git checkout -- .
+        prompt_user JUSTIFICATION "Enter deferral justification: "
+        [ -z "$JUSTIFICATION" ] && JUSTIFICATION="unspecified"
+        revert_target_file "$FILE"
         log_event "ADVISORY" "codemender" "$(jq -n --argjson f "$finding" --arg j "$JUSTIFICATION" '{findings:[$f], justification:$j}')"
         notify "ADVISORY" "Finding $FINDING_ID ($SEV) deferred by $(git config user.email 2>/dev/null || echo unknown): $JUSTIFICATION" \
           "$(jq -n --argjson f "$finding" '{findings:[$f]}')"
         ;;
       2)
         echo "Running cm verify - this can take a while..." >&2
-        if cm verify "$FINDING_ID" -y --bypass-warning; then
-          git checkout -- .
+        if cm verify "$FINDING_ID" -y --bypass-warning >&2; then
+          revert_target_file "$FILE"
           log_event "BLOCKED" "codemender" "$(jq -n --argjson f "$finding" '{findings:[$f], reason:"confirmed exploitable via cm verify"}')"
           notify "BLOCKED - HELP NEEDED" "Finding $FINDING_ID confirmed exploitable by cm verify and could not be auto-fixed. Push blocked - needs help from another team." \
             "$(jq -n --argjson f "$finding" '{findings:[$f]}')"
@@ -204,12 +219,12 @@ while IFS= read -r finding <&3; do
           deny "Exploitable vulnerability $FINDING_ID confirmed by 'cm verify' and could not be auto-fixed. See $SECURITY_GATE_LOG - loop in security/another team for help before pushing."
         else
           echo "cm verify found this non-exploitable - treating as advisory and proceeding." >&2
-          git checkout -- .
+          revert_target_file "$FILE"
           log_event "ADVISORY" "codemender" "$(jq -n --argjson f "$finding" '{findings:[$f], reason:"cm verify found non-exploitable"}')"
         fi
         ;;
       *)
-        git checkout -- .
+        revert_target_file "$FILE"
         log_event "BLOCKED" "codemender" "$(jq -n --argjson f "$finding" '{findings:[$f], reason:"unresolved - no fix, deferral, or verification decision"}')"
         rm -rf "$WORK_DIR"
         deny "Unresolved finding $FINDING_ID ($SEV): no fix, deferral, or verification decision was made. See $SECURITY_GATE_LOG."

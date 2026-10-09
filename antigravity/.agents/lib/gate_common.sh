@@ -16,6 +16,7 @@
 : "${SECURITY_GATE_TEST_CMD:=python3 -m unittest discover -s tests}"
 : "${SECURITY_GATE_NOTIFY_CMD:=}"                # optional; receives a JSON event on stdin (e.g. a Slack/ticket webhook wrapper)
 : "${SECURITY_GATE_STATE_DB:=$HOME/.codemender/state.db}"
+: "${SECURITY_GATE_INTERACTIVE:=false}"          # true = enable interactive terminal prompts during remediation/escalation
 
 _gate_repo_root() {
   git rev-parse --show-toplevel 2>/dev/null || pwd
@@ -24,15 +25,55 @@ _gate_repo_root() {
 : "${SECURITY_GATE_LOG:=$(_gate_repo_root)/.security-gate/findings-log.ndjson}"
 
 # --- Antigravity hook envelope ---
+# Emits both canonical PreToolHookResult fields (decision, reason) and
+# legacy fields (allow_tool, deny_reason) for backward compatibility.
 allow() {
-  echo '{"allow_tool": true}'
+  echo '{"decision": "allow", "allow_tool": true}'
   exit 0
 }
 
 deny() {
   local reason="$1"
-  jq -n --arg reason "$reason" '{allow_tool: false, reason: $reason}'
+  jq -n --arg reason "$reason" \
+    '{decision: "deny", allow_tool: false, reason: $reason, deny_reason: $reason}'
   exit 0
+}
+
+# When Antigravity invokes a PreToolUse hook for run_command, it pipes a JSON
+# payload on stdin with .toolCall.args.CommandLine. If a JSON payload is
+# present and the command is not `git push`, allow immediately. If stdin is
+# empty or non-JSON (e.g. direct CLI run or test harness), proceed with scan.
+check_git_push_stdin() {
+  if [ -t 0 ]; then
+    return 0
+  fi
+  local input cmd
+  input=$(cat)
+  if [ -z "${input//[[:space:]]/}" ]; then
+    return 0
+  fi
+  if echo "$input" | jq -e 'type == "object" and (.toolCall != null or .tool_input != null)' >/dev/null 2>&1; then
+    cmd=$(echo "$input" | jq -r '.toolCall.args.CommandLine // .toolCall.args.command // .tool_input.command // empty' 2>/dev/null)
+    case "$cmd" in
+      *"git push"*) return 0 ;;
+      *) allow ;;
+    esac
+  fi
+}
+
+# prompt_user VAR_NAME PROMPT_TEXT
+# Prompts only when SECURITY_GATE_INTERACTIVE=true so automated agent hooks
+# and test suites never hang on /dev/tty or abort under `set -e` on EOF.
+prompt_user() {
+  local __var_name="$1" __prompt="$2" __ans=""
+  if [ "$SECURITY_GATE_INTERACTIVE" = "true" ]; then
+    if [ -r /dev/tty ] && [ -w /dev/tty ]; then
+      read -r -p "$__prompt" __ans < /dev/tty > /dev/tty 2>&1 || __ans=""
+    else
+      read -r -p "$__prompt" __ans 2>&2 || __ans=""
+    fi
+  fi
+  printf -v "$__var_name" '%s' "$__ans"
 }
 
 # --- Severity ---

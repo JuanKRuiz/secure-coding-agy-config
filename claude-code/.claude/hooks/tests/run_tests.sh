@@ -133,9 +133,9 @@ test_cm_advisory_low_severity_does_not_block() {
 
 test_cm_blocking_high_severity_autofix_commits() {
   local repo; repo=$(setup_repo)
-  SECURITY_GATE_TEST_CMD=true MOCK_CM_REPORT_MODE=high \
+  SECURITY_GATE_TEST_CMD="echo 'running test suite on stdout'" MOCK_CM_REPORT_MODE=high \
     run_hook "$HOOKS_DIR/security_gate_hook.sh" "$repo"
-  assert_eq "cm: high-severity finding auto-fixed allows" "allow" "$(decision "$repo")"
+  assert_eq "cm: high-severity finding auto-fixed allows (clean stdout JSON)" "allow" "$(decision "$repo")"
   assert_contains "cm: fix logged as FIXED" "$(log_events "$repo")" "FIXED"
   local last_msg
   last_msg=$(cd "$repo" && git log -1 --pretty=%B)
@@ -143,12 +143,23 @@ test_cm_blocking_high_severity_autofix_commits() {
   cleanup_repo "$repo"
 }
 
+test_cm_legacy_pascal_schema_autofix_commits() {
+  local repo; repo=$(setup_repo)
+  MOCK_CM_SCHEMA=pascal SECURITY_GATE_TEST_CMD=true MOCK_CM_REPORT_MODE=high \
+    run_hook "$HOOKS_DIR/security_gate_hook.sh" "$repo"
+  assert_eq "cm: legacy PascalCase schema still auto-fixes and allows" "allow" "$(decision "$repo")"
+  assert_contains "cm: legacy PascalCase fix logged as FIXED" "$(log_events "$repo")" "FIXED"
+  cleanup_repo "$repo"
+}
+
 test_cm_blocking_retries_exhausted_no_tty_fails_closed() {
   local repo; repo=$(setup_repo)
+  echo "uncommitted work" >> "$repo/README.txt"
   SECURITY_GATE_TEST_CMD=false MOCK_CM_REPORT_MODE=high \
     run_hook "$HOOKS_DIR/security_gate_hook.sh" "$repo"
   assert_eq "cm: unfixable finding + no tty denies" "deny" "$(decision "$repo")"
   assert_contains "cm: unresolved finding logged as BLOCKED" "$(log_events "$repo")" "BLOCKED"
+  assert_contains "cm: unrelated uncommitted changes in README.txt preserved on revert" "$(cat "$repo/README.txt")" "uncommitted work"
   cleanup_repo "$repo"
 }
 
@@ -224,6 +235,7 @@ for t in \
   test_cm_error_allow_on_error_true \
   test_cm_advisory_low_severity_does_not_block \
   test_cm_blocking_high_severity_autofix_commits \
+  test_cm_legacy_pascal_schema_autofix_commits \
   test_cm_blocking_retries_exhausted_no_tty_fails_closed \
   test_cm_large_fix_diff_escalates_not_autocommitted \
   test_cm_mixed_severity_fixes_blocking_logs_advisory \

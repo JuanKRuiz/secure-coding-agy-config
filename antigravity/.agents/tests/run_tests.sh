@@ -39,29 +39,23 @@ setup_repo() {
 }
 
 run_hook() {
-  local script="$1" repo="$2"
+  local script="$1" repo="$2" stdin_payload="${3:-}"
   local state_dir
   state_dir=$(mktemp -d)
   (
     cd "$repo" || exit 1
-    # Antigravity's hook contract doesn't consume stdin for a JSON
-    # payload (unlike Claude Code), so `read -p` prompts read real stdin.
-    # Feed enough blank-line "just pressed Enter" answers to get through
-    # the RED confirmation and/or the escalation menu without a real
-    # tty; an unrecognized/empty escalation choice is expected to fail
-    # closed (deny), which is exactly what these tests check for.
     PATH="$MOCK_BIN:$PATH" \
     MOCK_STATE_DIR="$state_dir" \
     MOCK_FILE="vuln.py" \
     SECURITY_GATE_STATE_DB="$repo/.codemender-test/state.db" \
-    bash "$script" > "$repo/.hook_stdout" 2> "$repo/.hook_stderr" < <(printf '\n\n\n\n\n')
+    bash "$script" <<< "$stdin_payload" > "$repo/.hook_stdout" 2> "$repo/.hook_stderr"
     echo $? > "$repo/.hook_exit"
   )
   rm -rf "$state_dir"
 }
 
 decision() {
-  jq -r 'if .allow_tool == true then "allow" elif .allow_tool == false then "deny" else "MISSING" end' \
+  jq -r 'if .decision == "allow" and .allow_tool == true then "allow" elif .decision == "deny" and .allow_tool == false then "deny" else "MISSING" end' \
     "$1/.hook_stdout" 2>/dev/null
 }
 
@@ -97,12 +91,28 @@ assert_contains() {
 
 cleanup_repo() { rm -rf "$1"; }
 
-# --- test cases (same coverage as the Claude Code harness) --------------
+# --- test cases (same coverage as the Claude Code harness + Antigravity stdin) ---
 
 test_cm_pass_no_findings() {
   local repo; repo=$(setup_repo)
   MOCK_CM_REPORT_MODE=clean run_hook "$AGENTS_DIR/security_gate_hook.sh" "$repo"
   assert_eq "cm: clean scan allows" "allow" "$(decision "$repo")"
+  cleanup_repo "$repo"
+}
+
+test_cm_stdin_non_push_command_allows_without_scanning() {
+  local repo; repo=$(setup_repo)
+  MOCK_CM_REPORT_MODE=error run_hook "$AGENTS_DIR/security_gate_hook.sh" "$repo" \
+    '{"toolCall":{"name":"run_command","args":{"CommandLine":"pytest -q"}}}'
+  assert_eq "cm: non-push run_command payload on stdin allows immediately" "allow" "$(decision "$repo")"
+  cleanup_repo "$repo"
+}
+
+test_cm_stdin_push_command_triggers_scan() {
+  local repo; repo=$(setup_repo)
+  MOCK_CM_REPORT_MODE=error run_hook "$AGENTS_DIR/security_gate_hook.sh" "$repo" \
+    '{"toolCall":{"name":"run_command","args":{"CommandLine":"git push origin main"}}}'
+  assert_eq "cm: git push run_command payload on stdin triggers scan" "deny" "$(decision "$repo")"
   cleanup_repo "$repo"
 }
 
@@ -134,9 +144,9 @@ test_cm_advisory_low_severity_does_not_block() {
 
 test_cm_blocking_high_severity_autofix_commits() {
   local repo; repo=$(setup_repo)
-  SECURITY_GATE_TEST_CMD=true MOCK_CM_REPORT_MODE=high \
+  SECURITY_GATE_TEST_CMD="echo 'running test suite on stdout'" MOCK_CM_REPORT_MODE=high \
     run_hook "$AGENTS_DIR/security_gate_hook.sh" "$repo"
-  assert_eq "cm: high-severity finding auto-fixed allows" "allow" "$(decision "$repo")"
+  assert_eq "cm: high-severity finding auto-fixed allows (clean stdout JSON)" "allow" "$(decision "$repo")"
   assert_contains "cm: fix logged as FIXED" "$(log_events "$repo")" "FIXED"
   local last_msg
   last_msg=$(cd "$repo" && git log -1 --pretty=%B)
@@ -144,12 +154,23 @@ test_cm_blocking_high_severity_autofix_commits() {
   cleanup_repo "$repo"
 }
 
+test_cm_legacy_pascal_schema_autofix_commits() {
+  local repo; repo=$(setup_repo)
+  MOCK_CM_SCHEMA=pascal SECURITY_GATE_TEST_CMD=true MOCK_CM_REPORT_MODE=high \
+    run_hook "$AGENTS_DIR/security_gate_hook.sh" "$repo"
+  assert_eq "cm: legacy PascalCase schema still auto-fixes and allows" "allow" "$(decision "$repo")"
+  assert_contains "cm: legacy PascalCase fix logged as FIXED" "$(log_events "$repo")" "FIXED"
+  cleanup_repo "$repo"
+}
+
 test_cm_blocking_retries_exhausted_no_tty_fails_closed() {
   local repo; repo=$(setup_repo)
+  echo "uncommitted work" >> "$repo/README.txt"
   SECURITY_GATE_TEST_CMD=false MOCK_CM_REPORT_MODE=high \
     run_hook "$AGENTS_DIR/security_gate_hook.sh" "$repo"
   assert_eq "cm: unfixable finding + no tty denies" "deny" "$(decision "$repo")"
   assert_contains "cm: unresolved finding logged as BLOCKED" "$(log_events "$repo")" "BLOCKED"
+  assert_contains "cm: unrelated uncommitted changes in README.txt preserved on revert" "$(cat "$repo/README.txt")" "uncommitted work"
   cleanup_repo "$repo"
 }
 
@@ -218,10 +239,13 @@ test_semgrep_blocking_high_severity_denies() {
 
 for t in \
   test_cm_pass_no_findings \
+  test_cm_stdin_non_push_command_allows_without_scanning \
+  test_cm_stdin_push_command_triggers_scan \
   test_cm_error_blocks_by_default \
   test_cm_error_allow_on_error_true \
   test_cm_advisory_low_severity_does_not_block \
   test_cm_blocking_high_severity_autofix_commits \
+  test_cm_legacy_pascal_schema_autofix_commits \
   test_cm_blocking_retries_exhausted_no_tty_fails_closed \
   test_cm_large_fix_diff_escalates_not_autocommitted \
   test_cm_mixed_severity_fixes_blocking_logs_advisory \

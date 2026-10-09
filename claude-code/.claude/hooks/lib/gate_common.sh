@@ -13,6 +13,7 @@
 : "${SECURITY_GATE_TEST_CMD:=python3 -m unittest discover -s tests}"
 : "${SECURITY_GATE_NOTIFY_CMD:=}"                # optional; receives a JSON event on stdin (e.g. a Slack/ticket webhook wrapper)
 : "${SECURITY_GATE_STATE_DB:=$HOME/.codemender/state.db}"
+: "${SECURITY_GATE_INTERACTIVE:=false}"          # true = enable interactive terminal prompts during remediation/escalation
 
 _gate_repo_root() {
   git rev-parse --show-toplevel 2>/dev/null || pwd
@@ -31,6 +32,21 @@ deny() {
   jq -n --arg reason "$reason" \
     '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: $reason}}'
   exit 0
+}
+
+# prompt_user VAR_NAME PROMPT_TEXT
+# Prompts only when SECURITY_GATE_INTERACTIVE=true so automated agent hooks
+# and test suites never hang on /dev/tty or abort under `set -e` on EOF.
+prompt_user() {
+  local __var_name="$1" __prompt="$2" __ans=""
+  if [ "$SECURITY_GATE_INTERACTIVE" = "true" ]; then
+    if [ -r /dev/tty ] && [ -w /dev/tty ]; then
+      read -r -p "$__prompt" __ans < /dev/tty > /dev/tty 2>&1 || __ans=""
+    else
+      read -r -p "$__prompt" __ans 2>&2 || __ans=""
+    fi
+  fi
+  printf -v "$__var_name" '%s' "$__ans"
 }
 
 # --- Severity ---

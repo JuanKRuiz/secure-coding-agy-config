@@ -17,19 +17,30 @@ case "$1" in
       echo '[]'
       exit 0
     fi
-    case "${MOCK_CM_REPORT_MODE:-clean}" in
-      clean) echo '[]' ;;
-      high)  echo "[{\"FindingID\":\"F1\",\"FilePath\":\"${MOCK_FILE:-vuln.py}\",\"Severity\":\"HIGH\"}]" ;;
-      low)   echo "[{\"FindingID\":\"F1\",\"FilePath\":\"${MOCK_FILE:-vuln.py}\",\"Severity\":\"LOW\"}]" ;;
-      mixed) echo "[{\"FindingID\":\"F1\",\"FilePath\":\"${MOCK_FILE:-vuln.py}\",\"Severity\":\"HIGH\"},{\"FindingID\":\"F2\",\"FilePath\":\"${MOCK_FILE:-vuln.py}\",\"Severity\":\"LOW\"}]" ;;
-      *) echo '[]' ;;
-    esac
+    if [ "${MOCK_CM_SCHEMA:-snake}" = "pascal" ]; then
+      case "${MOCK_CM_REPORT_MODE:-clean}" in
+        clean) echo '[]' ;;
+        high)  echo "[{\"FindingID\":\"F1\",\"FilePath\":\"${MOCK_FILE:-vuln.py}\",\"Severity\":\"HIGH\"}]" ;;
+        low)   echo "[{\"FindingID\":\"F1\",\"FilePath\":\"${MOCK_FILE:-vuln.py}\",\"Severity\":\"LOW\"}]" ;;
+        mixed) echo "[{\"FindingID\":\"F1\",\"FilePath\":\"${MOCK_FILE:-vuln.py}\",\"Severity\":\"HIGH\"},{\"FindingID\":\"F2\",\"FilePath\":\"${MOCK_FILE:-vuln.py}\",\"Severity\":\"LOW\"}]" ;;
+        *) echo '[]' ;;
+      esac
+    else
+      case "${MOCK_CM_REPORT_MODE:-clean}" in
+        clean) echo '[]' ;;
+        high)  echo "[{\"finding_id\":\"F1\",\"file_path\":\"${MOCK_FILE:-vuln.py}\",\"severity\":\"HIGH\",\"status\":\"OPEN\"}]" ;;
+        low)   echo "[{\"finding_id\":\"F1\",\"file_path\":\"${MOCK_FILE:-vuln.py}\",\"severity\":\"LOW\",\"status\":\"OPEN\"}]" ;;
+        mixed) echo "[{\"finding_id\":\"F1\",\"file_path\":\"${MOCK_FILE:-vuln.py}\",\"severity\":\"HIGH\",\"status\":\"OPEN\"},{\"finding_id\":\"F2\",\"file_path\":\"${MOCK_FILE:-vuln.py}\",\"severity\":\"LOW\",\"status\":\"OPEN\"}]" ;;
+        *) echo '[]' ;;
+      esac
+    fi
     exit 0
     ;;
   fix)
     if [ "${MOCK_CM_FIX_EXIT:-0}" != "0" ]; then
       exit "$MOCK_CM_FIX_EXIT"
     fi
+    echo "cm fix: applied remediation patch for ${2:-unknown}"
     touch "$STATE_FILE"
     if [ -n "$MOCK_FILE" ] && [ -f "$MOCK_FILE" ]; then
       if [ "${MOCK_CM_FIX_LARGE:-false}" = "true" ]; then

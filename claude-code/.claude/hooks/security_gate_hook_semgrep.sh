@@ -36,6 +36,8 @@ case "$COMMAND" in
   *) allow ;;
 esac
 
+cd "$(_gate_repo_root)" || exit 1
+
 command -v semgrep >/dev/null 2>&1 || handle_scan_error "semgrep" "the 'semgrep' CLI is not on PATH"
 
 # 1. Discover modified files (compare against remote tracking or previous commit)

@@ -26,6 +26,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/gate_common.sh
 source "$SCRIPT_DIR/lib/gate_common.sh"
 
+check_git_push_stdin
+cd "$(_gate_repo_root)" || exit 1
+
 command -v semgrep >/dev/null 2>&1 || handle_scan_error "semgrep" "the 'semgrep' CLI is not on PATH"
 
 # 1. Discover modified files (compare against remote tracking or previous commit)
