@@ -5,15 +5,15 @@ description: >-
   GREEN, REFACTOR, PUSH cycle: writes a failing test before any production
   code, applies the Prove-It pattern to reproduce a vulnerability with a
   failing exploit test before patching, and ends with a PUSH step that
-  triggers the pre-push security gate. Use when fixing a security bug or
-  reported vulnerability (SQL injection, path traversal, XSS, IDOR), adding or
-  changing authentication, authorization, or input-validation logic at an
-  entry point, or when asked to reproduce an exploit or prove a fix with a
-  regression test. Don't use for non-security bug fixes, refactors, or general
-  unit tests, for documentation, configuration-only, or formatting changes,
-  for threat modeling with no code change (use threat-modeling), or as the
-  source of the secure implementation rules applied during GREEN (use
-  secure-coding).
+  triggers the pre-push security gate. Use when fixing a security bug,
+  reported vulnerability, or unsafe pattern such as string-built SQL or shell
+  commands (SQL injection, path traversal, XSS, IDOR), adding or changing
+  authentication, authorization, or input-validation logic at an entry point,
+  or when asked to reproduce an exploit or prove a fix with a regression test.
+  Don't use for non-security bug fixes, refactors, or general unit tests, for
+  documentation, configuration-only, or formatting changes, for threat
+  modeling with no code change (use threat-modeling), or as the source of the
+  secure implementation rules applied during GREEN (use secure-coding).
 ---
 
 # Test-Driven Development (TDD) Skill

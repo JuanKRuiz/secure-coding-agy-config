@@ -5,12 +5,12 @@ description: >-
   agents: input validation, parameterized SQL, path canonicalization, safe
   deserialization (pickle, YAML, XXE), password hashing, authenticated
   encryption, secure randomness, dependency pinning and pip-audit scanning,
-  least-privilege and sandboxed agent tools, prompt injection defenses,
-  human-in-the-loop approval, audit logging, and secrets storage. Use when
-  writing or reviewing a specific Python function or diff that handles
-  untrusted input, builds SQL queries, file paths, or shell commands,
-  deserializes data, hashes passwords, encrypts data, generates tokens, or
-  stores API keys; when designing an agent's tools, permissions, or
+  OWASP LLM01/LLM08 defenses (prompt injection, least-privilege and sandboxed
+  agent tools), human-in-the-loop approval, audit logging, and secrets
+  storage. Use when writing or reviewing a specific Python function or diff
+  that handles untrusted input, builds SQL queries, file paths, or shell
+  commands, deserializes data, hashes passwords, encrypts data, generates
+  tokens, or stores API keys; when designing an agent's tools, permissions, or
   guardrails; or during the GREEN step of a security fix. Don't use as the
   entry point for fixing a vulnerability (use test-driven-development), for
   starting a security review (use threat-modeling), or for XSS,
