@@ -24,7 +24,9 @@ flowchart TD
         TM --> Red["<b>3. RED</b><br/>Failing Security Tests"]:::gcpRed
         wpRed_dst((("↺<br/>RED"))):::wp_red -.-> Red
         Red --> Green["<b>4. GREEN & REFACTOR</b><br/>Secure Code + Tests Pass"]:::gcpGreen
-        Green ==> wpPush_src((("🚀<br/>Push"))):::wp_blue
+        Green --> Approve{"<b>5. USER APPROVAL</b><br/>Approve push?"}:::gcpYellow
+        Approve -->|"no"| Green
+        Approve ==>|"yes"| wpPush_src((("🚀<br/>Push"))):::wp_blue
     end
 
     SG_Phase1 ~~~ SG_Phase2
@@ -40,8 +42,8 @@ flowchart TD
         Scan -->|"blocking (cm)"| FixLoop["<b>↺ Auto-Remediation Loop (cm)</b><br/>cm fix → Run Tests → Rescan"]:::gcpBlue
         Scan -->|"blocking (semgrep)"| BlockedOut[["<b>BLOCKED</b><br/>Logged + Deny Push"]]:::gcpRed
 
-        FixLoop -->|"closed & diff ≤ 50L"| FixedOut[["<b>FIXED</b><br/>Auto-Committed + Logged"]]:::gcpGreen
-        FixLoop -->|"retries exhausted / diff > 50L"| Escalate{"<b>Human Escalation</b><br/>1: Defer<br/>2: cm verify<br/>3: Abort"}:::gcpYellow
+        FixLoop -->|"closed & diff at or under<br/>SECURITY_GATE_LARGE_FIX_LINES"| FixedOut[["<b>FIXED</b><br/>Auto-Committed + Logged"]]:::gcpGreen
+        FixLoop -->|"retries exhausted / diff over<br/>SECURITY_GATE_LARGE_FIX_LINES"| Escalate{"<b>Human Escalation</b><br/>1: Defer<br/>2: cm verify<br/>3: Abort"}:::gcpYellow
 
         Escalate -.->|"1: Defer / 2: Non-exploitable"| wpAdv_src((("⚠️<br/>Adv"))):::wp_yellow
         Escalate -->|"3: Abort / 2: Exploitable (Help Needed)"| BlockedOut
