@@ -28,9 +28,7 @@ flowchart TD
     Green --> GreenCheck{"Tests pass?"}
     GreenCheck -->|no| Green
     GreenCheck -->|yes| Refactor["REFACTOR — clean up,<br/>re-run full test suite"]
-    Refactor --> Confirm{"User approves push?"}
-    Confirm -->|no| Refactor
-    Confirm -->|yes| Push["git push"]
+    Refactor --> Push["git push"]
     Push --> ToolCheck{"cm / semgrep<br/>on PATH?"}
 
     subgraph Hook ["Security Gate Hook (PreToolUse on git push)"]
@@ -49,7 +47,7 @@ flowchart TD
         FixCheck -->|"no, retries exhausted"| Escalate{"Escalate to human"}
         FixCheck -->|yes| Rescan{"Rescan: finding<br/>actually closed?"}
         Rescan -->|"still open, retries left"| FixLoop
-        Rescan -->|closed| SizeCheck{"Fix diff at or under<br/>SECURITY_GATE_LARGE_FIX_LINES?"}
+        Rescan -->|closed| SizeCheck{"Fix diff under<br/>SECURITY_GATE_LARGE_FIX_LINES?"}
         SizeCheck -->|yes| Commit[["FIXED<br/>commit + log,<br/>push proceeds"]]
         SizeCheck -->|"no, too large"| Escalate
         Escalate -->|"1: defer + justification"| AdvisoryOut
